@@ -433,6 +433,7 @@ async function initSalonBooking(): Promise<void> {
     liffId: LIFF_ID,
     lineUserId: profile.userId,
     idToken,
+    displayName: profile.displayName,
   });
 }
 

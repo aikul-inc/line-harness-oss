@@ -11,6 +11,8 @@ export interface SalonBookingContext {
   liffId: string;
   lineUserId: string;
   idToken: string;
+  /** konkatsucafe fork (L-08): LINE のプロフィール名。「LINE名」の初期値に使う（本人が直せる） */
+  displayName?: string;
 }
 
 const Ctx = createContext<SalonBookingContext | null>(null);

@@ -1748,6 +1748,17 @@ export interface BookingRequest {
   staff_name: string;
   friend_name: string | null;
   requested_at: string;
+  /** konkatsucafe fork (L-08): 予約画面で聞いたお客様情報。聞いていない予約は null */
+  intake?: BookingIntake | null;
+}
+
+/** konkatsucafe fork (L-08): 1 件の予約に残るお客様情報（/yoyaku/ と同じ 12 項目） */
+export interface BookingIntake {
+  version: string;
+  /** キーは konkatsucafe の src/data/yoyaku.ts の fields の name */
+  values: Record<string, string>;
+  /** 表示用。12 項目を /yoyaku/ の並びで（短い呼び方と値） */
+  items: Array<{ name: string; label: string; value: string }>;
 }
 
 export interface BookingAvailabilityRule {

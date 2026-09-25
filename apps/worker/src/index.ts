@@ -93,6 +93,12 @@ export type Env = {
   Bindings: {
     /** Only exact enabled permits delivery. Missing/invalid values are no-send. */
     DELIVERY_MODE?: string;
+    /**
+     * konkatsucafe fork (L-08): LIFF の予約で「お客様情報」を聞くか。
+     * 未設定なら聞かない（上流のまま）。`konkatsucafe` なら聞いて必須にする。
+     * それ以外の値は設定の誤りとして LIFF からの予約を断る（fail-closed）。
+     */
+    BOOKING_INTAKE?: string;
     DB: D1Database;
     IMAGES: R2Bucket;
     ASSETS: Fetcher;
