@@ -44,6 +44,8 @@ export interface BookingHistoryItem {
   starts_at: string;
   status: string;
   customer_note?: string | null;
+  /** konkatsucafe fork (L-08): お客様情報つきの予約。メニュー・担当を見せない */
+  konkatsucafe?: number;
   menu_name: string;
   staff_name: string;
   profile_image_url: string | null;
@@ -105,7 +107,10 @@ async function post<T>(
 export function createApi(ctx: SalonBookingContext) {
   return {
     menus: () =>
-      get<{ menus: MenuItem[]; intake_form?: string | null }>('/api/liff/booking/menus', ctx),
+      get<{ menus: MenuItem[]; intake_form?: string | null; demo_notice?: boolean }>(
+        '/api/liff/booking/menus',
+        ctx,
+      ),
     staffOf: (menuId: string) =>
       get<{ staff: StaffItem[] }>(`/api/liff/booking/menus/${menuId}/staff`, ctx),
     availability: (
@@ -120,8 +125,9 @@ export function createApi(ctx: SalonBookingContext) {
     },
     createRequest: (
       body: {
-        menu_id: string;
-        staff_id: string;
+        // konkatsucafe fork (L-08): konkatsucafe の流れではメニュー・担当は受け口が割り当てる
+        menu_id?: string;
+        staff_id?: string;
         starts_at: string;
         customer_note?: string;
         intake?: IntakeDraft;

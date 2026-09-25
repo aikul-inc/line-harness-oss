@@ -1,8 +1,13 @@
 // konkatsucafe fork (L-08): お客様情報の項目が /yoyaku/ の写しのままであること、検証の範囲。
 // 期待値は konkatsucafe-line の src/data/yoyaku.ts の fields から写した。すべて架空の値。
 import { describe, expect, it } from 'vitest';
+import { renderNotificationText } from './booking-notifier.js';
 import {
   ASKED_FIELDS,
+  VISIT_TIMES,
+  checkVisitSlot,
+  formatVisitJst,
+  visitDateBounds,
   INTAKE_FIELDS,
   intakeFriendMetadata,
   intakeItems,
@@ -165,5 +170,54 @@ describe('friend metadata and readback', () => {
   it('normalizes phone numbers like /yoyaku/', () => {
     expect(normalizeTel('（０００）０００ー００００')).toBe('000-000-0000');
     expect(normalizeTel(' 090 0000 0000 ')).toBe('09000000000');
+  });
+});
+
+describe('visit date/time like /yoyaku/ (L-08 s2)', () => {
+  // JST 2026-09-25 18:10
+  const NOW = new Date('2026-09-25T09:10:00Z');
+  const at = (d: string, t: string) => new Date(`${d}T${t}:00+09:00`);
+
+  it('uses the 16 /yoyaku/ times and today..+2 years', () => {
+    expect(VISIT_TIMES).toHaveLength(16);
+    expect([VISIT_TIMES[0], VISIT_TIMES[15]]).toEqual(['10:30', '18:00']);
+    expect(visitDateBounds(NOW)).toEqual({ min: '2026-09-25', max: '2028-09-25' });
+  });
+
+  it.each([
+    ['2026-09-29', '10:30', 'ok'], // 火曜も選べる（/yoyaku/ と同じ）
+    ['2028-09-25', '18:00', 'ok'],
+    ['2026-09-25', '18:00', 'past'], // 今日のすでに過ぎた時間（今は 18:10）
+    ['2026-09-25', '17:30', 'past'],
+    ['2026-09-26', '10:00', 'invalid'],
+    ['2026-09-26', '18:30', 'invalid'],
+    ['2026-09-26', '11:15', 'invalid'],
+    ['2028-09-26', '10:30', 'invalid'],
+    ['2026-09-24', '14:00', 'invalid'],
+  ])('%s %s → %s', (d, t, expected) => {
+    expect(checkVisitSlot(at(d, t), NOW)).toBe(expected);
+  });
+
+  it('rejects seconds and broken dates', () => {
+    expect(checkVisitSlot(new Date('2026-10-01T05:00:30Z'), NOW)).toBe('invalid');
+    expect(checkVisitSlot(new Date('nope'), NOW)).toBe('invalid');
+  });
+
+  it('formats the notice date in Japanese with the weekday', () => {
+    expect(formatVisitJst('2026-10-03 14:00')).toBe('2026年10月3日(土) 14:00');
+  });
+
+  it('konkatsucafe notices hide menu and staff; demo adds the notice', () => {
+    const ctx = { menuName: 'パンケーキ', staffName: 'カフェ受付', startsAtJst: '2026-10-03 14:00', hoursBefore: 0 };
+    expect(renderNotificationText('requested', { ...ctx, style: 'konkatsucafe' })).toBe(
+      'ご予約を受け付けました。\n来店希望日時: 2026年10月3日(土) 14:00\n\nお店からお電話でご予約内容を確認のうえ、確定のご連絡をいたします。',
+    );
+    for (const kind of ['requested', 'approved', 'rejected', 'expired', 'day_before', 'hours_before'] as const) {
+      const text = renderNotificationText(kind, { ...ctx, style: 'konkatsucafe-demo' });
+      expect(text).not.toMatch(/パンケーキ|カフェ受付|メニュー|担当/);
+      expect(text.endsWith('※デモのため、実際のご予約にはなりません。')).toBe(true);
+    }
+    // 上流の書き方は変えない
+    expect(renderNotificationText('requested', ctx)).toContain('メニュー: パンケーキ');
   });
 });

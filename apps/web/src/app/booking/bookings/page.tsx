@@ -189,7 +189,8 @@ export default function BookingsPage() {
 
   const groupedItems = useMemo(() => {
     const referenceNow = new Date()
-    const groups: Record<BookingTimeGroup, BookingRequest[]> = {
+    const groups: Record<BookingTimeGroup | 'pending', BookingRequest[]> = {
+      pending: [],
       today: [],
       future: [],
       past: [],
@@ -197,15 +198,19 @@ export default function BookingsPage() {
     for (const item of items) {
       if (statusFilter !== 'all' && item.status !== statusFilter) continue
       if (!matchesTimeFilter(item.starts_at, timeFilter, referenceNow)) continue
-      groups[getBookingTimeGroup(item.starts_at, referenceNow)].push(item)
+      // konkatsucafe fork (L-08): 未確定（店舗が電話で確かめる予約）は日付に関係なく一番上にまとめる
+      if (item.status === 'requested') groups.pending.push(item)
+      else groups[getBookingTimeGroup(item.starts_at, referenceNow)].push(item)
     }
+    groups.pending = sortBookings(groups.pending, sort, 'future')
     groups.today = sortBookings(groups.today, sort, 'today')
     groups.future = sortBookings(groups.future, sort, 'future')
     groups.past = sortBookings(groups.past, sort, 'past')
     return groups
   }, [items, sort, statusFilter, timeFilter])
 
-  const visibleCount = groupedItems.today.length + groupedItems.future.length + groupedItems.past.length
+  const visibleCount =
+    groupedItems.pending.length + groupedItems.today.length + groupedItems.future.length + groupedItems.past.length
 
   function showRequested() {
     setStatusFilter('requested')
@@ -366,6 +371,15 @@ export default function BookingsPage() {
         </EmptyPanel>
       ) : (
         <div className="space-y-5">
+          {groupedItems.pending.length > 0 && (
+            <BookingSection
+              title="未確定の予約"
+              helper="お電話で確認して、承認か拒否を選んでください（拒否すると受付の取り消しがトークに届きます）"
+              tone="amber"
+              items={groupedItems.pending}
+              onAction={handleDecide}
+            />
+          )}
           {groupedItems.today.length > 0 && (
             <BookingSection
               title="今日の予約"
@@ -481,7 +495,7 @@ function BookingSection({
 }: {
   title: string
   helper: string
-  tone: 'blue' | 'green' | 'gray'
+  tone: 'amber' | 'blue' | 'green' | 'gray'
   items: BookingRequest[]
   onAction: (
     id: string,
@@ -490,6 +504,7 @@ function BookingSection({
   collapsible?: boolean
 }) {
   const dotColor = {
+    amber: 'bg-amber-500',
     blue: 'bg-blue-500',
     green: 'bg-emerald-500',
     gray: 'bg-gray-400',
@@ -571,6 +586,25 @@ function BookingCard({
               <StatusAndNew status={booking.status} recentlyReceived={recentlyReceived} />
             </span>
           </div>
+          {booking.intake ? (
+            // konkatsucafe fork (L-08): メニュー・担当は自動の割り当てなので出さない。電話をかける番号を出す
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-700">
+              <span>
+                電話{' '}
+                {booking.intake.values.tel ? (
+                  <a
+                    href={`tel:${booking.intake.values.tel}`}
+                    className="font-semibold tabular-nums text-gray-900 hover:text-blue-600 hover:underline"
+                    data-testid="booking-tel"
+                  >
+                    {booking.intake.values.tel}
+                  </a>
+                ) : (
+                  '—'
+                )}
+              </span>
+            </div>
+          ) : (
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-600">
             <span>{booking.menu_name}</span>
             <span className="text-gray-300">•</span>
@@ -582,6 +616,7 @@ function BookingCard({
               </>
             )}
           </div>
+          )}
           <div className="mt-1 text-xs text-gray-400">
             {receivedFormatter.format(new Date(booking.requested_at))} 受付
           </div>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { createApi, type IntakeDraft, type MenuItem, type StaffItem } from '../lib/api.js';
+import { createApi, type MenuItem, type StaffItem } from '../lib/api.js';
 import { useSalonContext } from '../lib/context.js';
 import { jstStartsAtIso, formatJp } from '../lib/datetime.js';
 
@@ -7,17 +7,12 @@ export default function Confirm({
   menu,
   staff,
   slot,
-  intake,
-  stepLabel = 'step 4 / 4',
   onSubmitted,
   onBack,
 }: {
   menu: MenuItem;
   staff: StaffItem;
   slot: { date: string; start: string };
-  /** konkatsucafe fork (L-08): お客様情報。あるときは一緒に送り、「ご要望」欄は出さない */
-  intake?: IntakeDraft;
-  stepLabel?: string;
   onSubmitted: () => void;
   onBack: () => void;
 }) {
@@ -36,8 +31,7 @@ export default function Confirm({
           menu_id: menu.id,
           staff_id: staff.id,
           starts_at: jstStartsAtIso(slot.date, slot.start),
-          customer_note: intake ? undefined : note || undefined,
-          intake,
+          customer_note: note || undefined,
         },
         idemKey,
       );
@@ -46,9 +40,6 @@ export default function Confirm({
       const err = e as { status?: number; body?: { error?: string } };
       if (err.status === 409 && err.body?.error === 'slot_conflict') {
         setError('この時間枠は他の方の予約と重なりました。日時を選び直してください。');
-      } else if (err.status === 422 && err.body?.error === 'invalid_intake') {
-        // /yoyaku/ の受け口と同じ案内
-        setError('ご入力内容を確認できませんでした。お手数ですが、入力内容をお確かめのうえ、もう一度お試しください。');
       } else {
         setError('予約リクエストの送信に失敗しました。時間をおいて再度お試しください。');
       }
@@ -65,7 +56,7 @@ export default function Confirm({
       </button>
       <div>
         <h1 className="text-base font-bold text-gray-900">内容のご確認</h1>
-        <p className="text-xs text-gray-500 mt-1">{stepLabel}</p>
+        <p className="text-xs text-gray-500 mt-1">step 4 / 4</p>
       </div>
       <div className="sb-card">
         <dl className="space-y-3 text-sm">
@@ -80,23 +71,6 @@ export default function Confirm({
           />
         </dl>
       </div>
-      {intake && (
-        <div className="sb-card">
-          <p className="text-xs font-medium text-gray-500 mb-3">お客様情報</p>
-          <dl className="space-y-3 text-sm">
-            <Row label="お名前" value={`${intake.sei} ${intake.mei}`} />
-            <Row label="性別" value={intake.gender} />
-            <Row label="年齢" value={intake.age} />
-            <Row label="電話番号" value={intake.tel} />
-            <Row label="LINE名" value={intake.lineName || '（未入力）'} />
-            <Row label="来店人数" value={intake.visitCount} />
-            <Row label="ご利用条件" value={intake.agreeTerms ? '確認済み' : ''} />
-            <Row label="婚活の経験" value={intake.experience.join('、')} />
-            <Row label="ご相談内容" value={intake.message.trim() || '（未入力）'} />
-          </dl>
-        </div>
-      )}
-      {!intake && (
       <label className="block">
         <span className="text-xs font-medium text-gray-600 mb-1 block">ご要望（任意）</span>
         <textarea
@@ -107,7 +81,6 @@ export default function Confirm({
           placeholder="髪型の希望、アレルギー、その他"
         />
       </label>
-      )}
       {error && (
         <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm">
           {error}
@@ -139,8 +112,8 @@ function Row({
 }) {
   return (
     <div className="flex justify-between items-center pb-3 border-b border-gray-100 last:border-b-0 last:pb-0">
-      <dt className="text-gray-500 text-xs shrink-0 mr-3">{label}</dt>
-      <dd className={`text-gray-900 text-right break-words whitespace-pre-wrap min-w-0 ${valueClassName ?? ''}`}>{value}</dd>
+      <dt className="text-gray-500 text-xs">{label}</dt>
+      <dd className={`text-gray-900 ${valueClassName ?? ''}`}>{value}</dd>
     </div>
   );
 }

@@ -4,25 +4,16 @@ import StaffList from '../components/StaffList.js';
 import DateTimePicker from '../components/DateTimePicker.js';
 import Confirm from '../components/Confirm.js';
 import Done from '../components/Done.js';
-import IntakeForm, { emptyIntake } from '../components/IntakeForm.js';
+import KonkatsucafeBooking from './KonkatsucafeBooking.js';
 import { useSalonContext } from '../lib/context.js';
-import { createApi, type IntakeDraft, type MenuItem, type StaffItem } from '../lib/api.js';
+import { createApi, type MenuItem, type StaffItem } from '../lib/api.js';
 
-type Step = 'menu' | 'staff' | 'datetime' | 'intake' | 'confirm' | 'done';
+type Step = 'menu' | 'staff' | 'datetime' | 'confirm' | 'done';
 
-const BASE_STEPS: Array<{ key: Step; label: string }> = [
+const STEPS: Array<{ key: Step; label: string }> = [
   { key: 'menu', label: 'メニュー' },
   { key: 'staff', label: '担当' },
   { key: 'datetime', label: '日時' },
-  { key: 'confirm', label: '確認' },
-];
-
-// konkatsucafe fork (L-08): お客様情報を聞くときは日時と確認のあいだに 1 段足す。
-const INTAKE_STEPS: Array<{ key: Step; label: string }> = [
-  { key: 'menu', label: 'メニュー' },
-  { key: 'staff', label: '担当' },
-  { key: 'datetime', label: '日時' },
-  { key: 'intake', label: 'お客様情報' },
   { key: 'confirm', label: '確認' },
 ];
 
@@ -45,26 +36,25 @@ export default function Booking({
   // メニュー一覧を出す方が「初回オリエン直リンク経由なのに別メニュー
   // を選ばれる」事故より安全）。
   const [deepLinkResolving, setDeepLinkResolving] = useState(Boolean(initialMenuId));
-  // konkatsucafe fork (L-08): Worker がお客様情報を求めるか（メニューの応答で分かる）。
-  const [intakeForm, setIntakeForm] = useState<string | null>(null);
-  const [intake, setIntake] = useState<IntakeDraft>(() => emptyIntake(ctx.displayName));
+  // konkatsucafe fork (L-08): Worker が konkatsucafe の流れ（日時 → お客様情報 → 確認）を求めるか。
+  // メニューの応答で分かるまでは何も出さない（メニューの画面が一瞬出ないように）。
+  const [flow, setFlow] = useState<{ konkatsucafe: boolean; demoNotice: boolean } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     createApi(ctx)
       .menus()
       .then((res) => {
-        if (!cancelled) setIntakeForm(res.intake_form ?? null);
+        if (!cancelled) setFlow({ konkatsucafe: Boolean(res.intake_form), demoNotice: Boolean(res.demo_notice) });
       })
       .catch(() => {
-        // メニューの一覧が同じ API を叩いてエラーを出すので、ここでは何もしない。
+        // 取れなければ上流の流れにする（メニューの一覧が同じ API のエラーを出す）
+        if (!cancelled) setFlow({ konkatsucafe: false, demoNotice: false });
       });
     return () => {
       cancelled = true;
     };
   }, [ctx]);
-  const STEPS = intakeForm ? INTAKE_STEPS : BASE_STEPS;
-  const afterDatetime: Step = intakeForm ? 'intake' : 'confirm';
 
   useEffect(() => {
     if (!initialMenuId) return;
@@ -96,8 +86,18 @@ export default function Booking({
     url.searchParams.delete('mode');
     window.history.replaceState(null, '', url.toString());
     exitPeek();
-    setStep(afterDatetime);
+    setStep('confirm');
   }
+
+  if (!flow) {
+    return (
+      <div className="flex flex-col items-center py-12">
+        <div className="sb-spinner" />
+        <p className="text-sm text-gray-500 mt-3">読み込み中…</p>
+      </div>
+    );
+  }
+  if (flow.konkatsucafe) return <KonkatsucafeBooking demoNotice={flow.demoNotice} />;
 
   const showStepper = step !== 'done';
   const stepIdx = STEPS.findIndex((s) => s.key === step);
@@ -202,12 +202,12 @@ export default function Booking({
           ctaLabel={
             peekMode
               ? '空き状況の確認モードです（タップで予約に進めます）'
-              : `step 3 / ${STEPS.length}`
+              : 'step 3 / 4'
           }
           selected={slot}
           onSelect={(picked) => {
             setSlot(picked);
-            if (!peekMode) setStep(afterDatetime);
+            if (!peekMode) setStep('confirm');
           }}
           onBack={() => setStep('staff')}
         />
@@ -231,25 +231,13 @@ export default function Booking({
           </div>
         </div>
       )}
-      {step === 'intake' && menu && staff && slot && (
-        <IntakeForm
-          slot={slot}
-          value={intake}
-          onChange={setIntake}
-          onNext={() => setStep('confirm')}
-          onBack={() => setStep('datetime')}
-          stepLabel={`step 4 / ${STEPS.length}`}
-        />
-      )}
       {step === 'confirm' && menu && staff && slot && (
         <Confirm
           menu={menu}
           staff={staff}
           slot={slot}
-          intake={intakeForm ? intake : undefined}
-          stepLabel={`step ${STEPS.length} / ${STEPS.length}`}
           onSubmitted={() => setStep('done')}
-          onBack={() => setStep(afterDatetime === 'intake' ? 'intake' : 'datetime')}
+          onBack={() => setStep('datetime')}
         />
       )}
       {step === 'done' && <Done />}

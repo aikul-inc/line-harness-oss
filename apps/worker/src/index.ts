@@ -94,8 +94,9 @@ export type Env = {
     /** Only exact enabled permits delivery. Missing/invalid values are no-send. */
     DELIVERY_MODE?: string;
     /**
-     * konkatsucafe fork (L-08): LIFF の予約で「お客様情報」を聞くか。
-     * 未設定なら聞かない（上流のまま）。`konkatsucafe` なら聞いて必須にする。
+     * konkatsucafe fork (L-08): LIFF の予約を konkatsucafe の流れにするか。
+     * 未設定なら上流のまま。`konkatsucafe` なら 日時 → お客様情報 → 確認（メニュー・担当は自動、
+     * 枠の上限なし、店舗が電話で確かめて承認）。`konkatsucafe-demo` は控えにデモの注記を添える。
      * それ以外の値は設定の誤りとして LIFF からの予約を断る（fail-closed）。
      */
     BOOKING_INTAKE?: string;

@@ -32,8 +32,26 @@ export interface IntakeField {
   autocomplete?: string;
 }
 
-/** `BOOKING_INTAKE` に入れる値。これ以外の値は設定の誤りとして予約を断る */
+/**
+ * `BOOKING_INTAKE` に入れる値。konkatsucafe の予約の流れ全体を切り替える
+ * （お客様情報を聞く・メニューと担当を自動で割り当てる・枠の上限なし・自動の期限切れなし）。
+ * `-demo` は控えに「デモのため…」を添える。これ以外の値は設定の誤りとして予約を断る
+ */
 export const KONKATSUCAFE_INTAKE = 'konkatsucafe';
+export const KONKATSUCAFE_INTAKE_DEMO = 'konkatsucafe-demo';
+
+/** 控えに添えるデモの注記 */
+export const DEMO_NOTICE = '※デモのため、実際のご予約にはなりません。';
+
+/**
+ * 現サイトの営業時間・定休日（konkatsucafe-site の src/data/site.ts の hours・closed の写し）。
+ * /yoyaku/ と同じく、日付の選択では定休日を止めず、この文を添えるだけにする
+ */
+export const SHOP_HOURS = '10:00〜19:00（Lo .18:00）';
+export const SHOP_CLOSED = '火曜日（祝日は営業）';
+
+/** 来店希望日として選べる範囲（/yoyaku/ の VISIT_DATE_RANGE.futureYears）。今日から 2 年先まで */
+export const VISIT_DATE_FUTURE_YEARS = 2;
 
 /** 予約に一緒に残す版。L-10 がシートの「フォーム版」に使うかを決める */
 export const INTAKE_VERSION = 'lharness-2026-09';
@@ -158,6 +176,8 @@ export type IntakeValues = Record<string, string>;
 export interface StoredIntake {
   version: string;
   values: IntakeValues;
+  /** デモの予約。控えに DEMO_NOTICE を添える */
+  demo?: boolean;
 }
 
 export type IntakeResult =
@@ -274,7 +294,9 @@ export function parseStoredIntake(json: unknown): StoredIntake | null {
       const v = (values as Record<string, unknown>)[f.name];
       clean[f.name] = typeof v === 'string' ? v : '';
     }
-    return { version: parsed.version, values: clean };
+    return parsed.demo === true
+      ? { version: parsed.version, values: clean, demo: true }
+      : { version: parsed.version, values: clean };
   } catch {
     return null;
   }
@@ -283,4 +305,45 @@ export function parseStoredIntake(json: unknown): StoredIntake | null {
 /** 管理画面の一覧に出す並び（12 項目、短い呼び方と値） */
 export function intakeItems(values: IntakeValues): Array<{ name: string; label: string; value: string }> {
   return INTAKE_FIELDS.map((f) => ({ name: f.name, label: f.short, value: values[f.name] ?? '' }));
+}
+
+/** 来店希望時間の選択肢（/yoyaku/ の times。10:30〜18:00 の 30 分刻み） */
+export const VISIT_TIMES: readonly string[] =
+  INTAKE_FIELDS.find((f) => f.name === 'visitTime')?.options ?? [];
+
+/** 日本時間の暦日（YYYY-MM-DD） */
+export function jstDay(now: Date): string {
+  return new Date(now.getTime() + 9 * 3600_000).toISOString().slice(0, 10);
+}
+
+/** 来店希望日の下限・上限（/yoyaku/ の visitDateBounds と同じ。今日〜2 年後の同じ日） */
+export function visitDateBounds(now: Date): { min: string; max: string } {
+  const min = jstDay(now);
+  const limit = new Date(`${min}T00:00:00Z`);
+  limit.setUTCFullYear(limit.getUTCFullYear() + VISIT_DATE_FUTURE_YEARS);
+  return { min, max: limit.toISOString().slice(0, 10) };
+}
+
+/**
+ * 来店希望日時が /yoyaku/ の選択肢に入っているか。定休日は止めない（/yoyaku/ と同じ）。
+ * 'past' は選択肢には入っているが、すでに過ぎた時刻（今日の早い時間）
+ */
+export function checkVisitSlot(startsAt: Date, now: Date): 'ok' | 'invalid' | 'past' {
+  if (Number.isNaN(startsAt.getTime())) return 'invalid';
+  const jst = new Date(startsAt.getTime() + 9 * 3600_000).toISOString();
+  const date = jst.slice(0, 10);
+  const time = jst.slice(11, 16);
+  if (jst.slice(16, 23) !== ':00.000' || !VISIT_TIMES.includes(time)) return 'invalid';
+  const { min, max } = visitDateBounds(now);
+  if (date < min || date > max) return 'invalid';
+  if (startsAt.getTime() < now.getTime()) return 'past';
+  return 'ok';
+}
+
+/** 控えの日時の書き方。`2026-10-03 14:00` → `2026年10月3日(土) 14:00` */
+export function formatVisitJst(startsAtJst: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2})$/.exec(startsAtJst);
+  if (!m) return startsAtJst;
+  const w = '日月火水木金土'[new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`).getUTCDay()];
+  return `${Number(m[1])}年${Number(m[2])}月${Number(m[3])}日(${w}) ${m[4]}`;
 }
