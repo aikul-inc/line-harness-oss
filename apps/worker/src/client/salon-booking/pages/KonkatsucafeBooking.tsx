@@ -1,19 +1,24 @@
 // konkatsucafe fork (L-08): 日時 → お客様情報 → 確認 の予約画面。
 //
 // - メニュー・担当は選ばせない（受け口が割り当てる。画面にも名前を出さない）
-// - 日時は /yoyaku/ と同じ選び方: 来店希望日は今日〜2 年後、時間は 10:30〜18:00。
+// - 日時は /yoyaku/ と同じ範囲: 来店希望日は今日〜2 年後、時間は 10:30〜18:00。
 //   定休日も選べる（/yoyaku/ と同じく、営業時間・定休日の文を添えるだけ）。満席・空きなしは出さない
 // - 送ると「受付」。店舗が電話で確かめてから確定の連絡がトークに届く
-import { useMemo, useState } from 'react';
+// - s3: 日付・時間は、L Harness を入れる前の自前の予約画面（konkatsucafe-line の src/pages/liff/）と
+//   同じ横スクロールのボタンにした。2 年先まで出すため、月の切り替えを足した（自前は 14 日＋日付欄）。
+//   日付は画面を開いた時点で組み立てる（ビルド時に焼き込まない）
+import { useEffect, useMemo, useRef, useState } from 'react';
 import IntakeForm, { emptyIntake } from '../components/IntakeForm.js';
+import { BackLink, BottomBar, Card, Hint, Label, PageTitle, PrimaryButton, Row } from '../components/kc-ui.js';
 import { useSalonContext } from '../lib/context.js';
 import { createApi, type IntakeDraft } from '../lib/api.js';
-import { formatJp, jstStartsAtIso, jstToday } from '../lib/datetime.js';
+import { formatJp, jstStartsAtIso } from '../lib/datetime.js';
 import {
   DEMO_NOTICE,
   SHOP_CLOSED,
   SHOP_HOURS,
   VISIT_TIMES,
+  jstDay,
   visitDateBounds,
 } from '../../../services/booking-intake-fields.js';
 
@@ -26,14 +31,7 @@ const STEPS: Array<{ key: Step; label: string }> = [
 ];
 
 const CALLBACK_TEXT = 'お店からお電話でご予約内容を確認のうえ、確定のご連絡をいたします。';
-
-const primaryButton = {
-  background: '#06C755',
-  boxShadow: '0 1px 3px rgba(6, 199, 85, 0.3)',
-} as const;
-
-const inputClass =
-  'w-full border border-gray-300 rounded-xl px-3 py-2.5 text-base bg-white focus:outline-none focus:ring-2 focus:ring-green-500';
+const WEEKDAY = ['日', '月', '火', '水', '木', '金', '土'] as const;
 
 /** 今の日本時間（HH:MM）。今日を選んだときに、過ぎた時間を選べないようにする */
 function jstNowHHMM(): string {
@@ -47,12 +45,14 @@ export default function KonkatsucafeBooking({ demoNotice }: { demoNotice: boolea
   const [intake, setIntake] = useState<IntakeDraft>(() => emptyIntake(ctx.displayName));
   const stepIdx = STEPS.findIndex((s) => s.key === step);
 
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [step]);
+
   return (
     <div>
       {step !== 'done' && <Stepper index={stepIdx} />}
-      {step === 'datetime' && (
-        <VisitDateTime value={slot} onChange={setSlot} onNext={() => setStep('intake')} />
-      )}
+      {step === 'datetime' && <VisitDateTime value={slot} onChange={setSlot} onNext={() => setStep('intake')} />}
       {step === 'intake' && (
         <IntakeForm
           slot={slot}
@@ -80,10 +80,7 @@ export default function KonkatsucafeBooking({ demoNotice }: { demoNotice: boolea
 
 function Stepper({ index }: { index: number }) {
   return (
-    <div
-      className="mb-5 px-1"
-      style={{ display: 'grid', gridTemplateColumns: `repeat(${STEPS.length}, minmax(0, 1fr))` }}
-    >
+    <div className="mb-4 px-1" style={{ display: 'grid', gridTemplateColumns: `repeat(${STEPS.length}, minmax(0, 1fr))` }}>
       {STEPS.map((s, i) => {
         const done = i < index;
         const active = i === index;
@@ -94,36 +91,25 @@ function Stepper({ index }: { index: number }) {
               <span
                 aria-hidden
                 className="absolute"
-                style={{
-                  top: 12,
-                  left: '-50%',
-                  width: '100%',
-                  height: 2,
-                  background: i <= index ? '#06C755' : '#e5e7eb',
-                  zIndex: 0,
-                }}
+                style={{ top: 11, left: '-50%', width: '100%', height: 2, background: i <= index ? '#06C755' : '#e0e0e0', zIndex: 0 }}
               />
             )}
             <div
               className="relative flex items-center justify-center"
               style={{
-                width: 24,
-                height: 24,
+                width: 22,
+                height: 22,
                 borderRadius: 9999,
-                background: future ? '#e5e7eb' : '#06C755',
-                color: future ? '#9ca3af' : '#fff',
+                background: future ? '#e0e0e0' : '#06C755',
+                color: future ? '#999' : '#fff',
                 fontSize: 11,
                 fontWeight: 700,
                 zIndex: 1,
-                boxShadow: active ? '0 0 0 4px rgba(6, 199, 85, 0.18)' : 'none',
               }}
             >
               {done ? '✓' : i + 1}
             </div>
-            <span
-              className="mt-1.5 text-[10px] leading-tight"
-              style={{ color: active ? '#111827' : '#9ca3af', fontWeight: active ? 700 : 500 }}
-            >
+            <span className="mt-1 text-[11px] leading-tight" style={{ color: active ? '#111' : '#999', fontWeight: active ? 700 : 500 }}>
               {s.label}
             </span>
           </div>
@@ -131,6 +117,37 @@ function Stepper({ index }: { index: number }) {
       })}
     </div>
   );
+}
+
+/** `YYYY-MM` の一覧（下限の月〜上限の月） */
+function monthsBetween(min: string, max: string): string[] {
+  const out: string[] = [];
+  let y = Number(min.slice(0, 4));
+  let m = Number(min.slice(5, 7));
+  const endKey = max.slice(0, 7);
+  for (;;) {
+    const key = `${y}-${String(m).padStart(2, '0')}`;
+    out.push(key);
+    if (key >= endKey) break;
+    m++;
+    if (m > 12) {
+      m = 1;
+      y++;
+    }
+  }
+  return out;
+}
+
+/** 下限〜上限のすべての日（1 本の帯に並べる。約 2 年で 731 日） */
+function allDays(min: string, max: string): Array<{ value: string; w: number; d: number; m: number }> {
+  const out: Array<{ value: string; w: number; d: number; m: number }> = [];
+  for (let t = new Date(`${min}T00:00:00Z`).getTime(); ; t += 86400_000) {
+    const date = new Date(t);
+    const value = date.toISOString().slice(0, 10);
+    if (value > max) break;
+    out.push({ value, w: date.getUTCDay(), d: date.getUTCDate(), m: date.getUTCMonth() + 1 });
+  }
+  return out;
 }
 
 function VisitDateTime({
@@ -142,84 +159,188 @@ function VisitDateTime({
   onChange: (next: { date: string; start: string }) => void;
   onNext: () => void;
 }) {
-  // 開いた時点の日本時間の今日から数える（ビルド時に焼き込まない）
+  // 開いた時点の日本時間の今日から組み立てる（ビルド時に焼き込まない）
   const bounds = useMemo(() => visitDateBounds(new Date()), []);
-  const today = jstToday();
+  const today = jstDay(new Date());
   const nowHHMM = jstNowHHMM();
+  const months = useMemo(() => monthsBetween(bounds.min, bounds.max), [bounds]);
+  const days = useMemo(() => allDays(bounds.min, bounds.max), [bounds]);
+  // 見出しの月は、帯の左端に見えている日の月（指で送ると変わる）
+  const [month, setMonth] = useState(() => (value.date ? value.date.slice(0, 7) : months[0]));
+  const monthIdx = months.indexOf(month);
   const [errors, setErrors] = useState<{ date?: string; time?: string }>({});
+  const dayRef = useRef<HTMLDivElement>(null);
   const isPast = (t: string) => value.date === today && t < nowHHMM;
+
+  // 戻ってきたときは、選んだ日が見える位置から始める（最初の 1 回だけ）
+  useEffect(() => {
+    const box = dayRef.current;
+    const picked = box?.querySelector<HTMLElement>('[data-selected="true"]');
+    if (box && picked) box.scrollLeft = picked.offsetLeft - 16;
+  }, []);
+
+  /** 帯を送ったら、左端の日の月を見出しにする */
+  function onDaysScroll() {
+    const box = dayRef.current;
+    if (!box) return;
+    const items = box.querySelectorAll<HTMLElement>('[data-day]');
+    if (items.length === 0) return;
+    // 日は同じ幅で並ぶので、位置から番号を割り出す（731 個を毎回なめない）
+    const first = items[0];
+    const step = items.length > 1 ? items[1].offsetLeft - first.offsetLeft : 1;
+    const i = Math.min(items.length - 1, Math.max(0, Math.floor((box.scrollLeft + 20 - first.offsetLeft) / step)));
+    const key = items[i]?.dataset.day?.slice(0, 7);
+    if (key && key !== month) setMonth(key);
+  }
+
+  /** 月の切り替え: その月の最初の日まで帯を送る */
+  function jumpMonth(key: string) {
+    const box = dayRef.current;
+    const target = box?.querySelector<HTMLElement>(`[data-day^="${key}"]`);
+    // すぐに送る（ゆっくり送ると、途中の位置で見出しの月が戻ってしまう）
+    if (box && target) box.scrollLeft = target.offsetLeft - 16;
+    setMonth(key);
+  }
+
+  function pickDate(date: string) {
+    const start = date === today && value.start && value.start < nowHHMM ? '' : value.start;
+    onChange({ date, start });
+    setErrors({ ...errors, date: undefined });
+  }
 
   function handleNext() {
     const next: { date?: string; time?: string } = {};
-    if (!value.date) next.date = '来店希望日をご入力ください';
-    else if (value.date < bounds.min || value.date > bounds.max) {
-      next.date = '本日から2年以内の日付をご入力ください';
-    }
+    if (!value.date) next.date = '来店希望日をお選びください';
     if (!value.start) next.time = '来店希望時間をお選びください';
     else if (isPast(value.start)) next.time = '過ぎた時間は選べません。来店希望時間をお選びください';
     setErrors(next);
     if (!next.date && !next.time) onNext();
   }
 
+  const [yy, mm] = [Number(month.slice(0, 4)), Number(month.slice(5, 7))];
+
   return (
-    <div className="space-y-4 sb-slide-up">
-      <div>
-        <h1 className="text-base font-bold text-gray-900">来店希望日時</h1>
-        <p className="text-xs text-gray-500 mt-1">step 1 / {STEPS.length}</p>
-      </div>
-      <div className="sb-card space-y-5">
-        <label className="block">
-          <span className="block mb-1 text-sm font-medium text-gray-800">
-            来店希望日<span className="ml-1 text-xs font-bold text-red-600">必須</span>
-          </span>
-          <input
-            type="date"
-            name="visitDate"
-            min={bounds.min}
-            max={bounds.max}
-            value={value.date}
-            onChange={(e) => {
-              const date = e.target.value;
-              // 今日に変えたとき、過ぎた時間が選ばれたままにしない
-              const start = date === today && value.start && value.start < nowHHMM ? '' : value.start;
-              onChange({ date, start });
-              setErrors({});
-            }}
-            className={inputClass}
-          />
-          {errors.date && <p className="text-xs text-red-600 mt-1">{errors.date}</p>}
-        </label>
-        <label className="block">
-          <span className="block mb-1 text-sm font-medium text-gray-800">
-            来店希望時間<span className="ml-1 text-xs font-bold text-red-600">必須</span>
-          </span>
-          <select
-            name="visitTime"
-            value={value.start}
-            onChange={(e) => {
-              onChange({ ...value, start: e.target.value });
-              setErrors({ ...errors, time: undefined });
-            }}
-            className={inputClass}
+    <div className="sb-slide-up pb-28">
+      <PageTitle title="来店希望日時" sub={`step 1 / ${STEPS.length}`} />
+      <Card>
+        <Row>
+          <Label text="来店希望日" required />
+          <div className="mb-2 flex items-center justify-between">
+            <button
+              type="button"
+              aria-label="前の月"
+              disabled={monthIdx <= 0}
+              onClick={() => jumpMonth(months[monthIdx - 1])}
+              className="flex h-9 w-9 items-center justify-center rounded-full text-[20px] text-[#555] disabled:text-[#d5d5d5]"
+            >
+              ‹
+            </button>
+            <p className="text-[15px] font-bold text-[#111]" data-testid="sb-month">
+              {yy}年{mm}月
+            </p>
+            <button
+              type="button"
+              aria-label="次の月"
+              disabled={monthIdx >= months.length - 1}
+              onClick={() => jumpMonth(months[monthIdx + 1])}
+              className="flex h-9 w-9 items-center justify-center rounded-full text-[20px] text-[#555] disabled:text-[#d5d5d5]"
+            >
+              ›
+            </button>
+          </div>
+          <div
+            ref={dayRef}
+            onScroll={onDaysScroll}
+            className="kc-scroll"
+            role="radiogroup"
+            aria-label="来店希望日"
+            data-testid="sb-days"
           >
-            <option value="">選択してください</option>
-            {VISIT_TIMES.map((t) => (
-              <option key={t} value={t} disabled={isPast(t)}>
-                {t}
-              </option>
-            ))}
-          </select>
-          {errors.time && <p className="text-xs text-red-600 mt-1">{errors.time}</p>}
-        </label>
-        <ul className="text-xs text-gray-600 space-y-1" data-testid="sb-shop-hours">
-          <li>営業時間　／　{SHOP_HOURS}</li>
-          <li>定休日　／　{SHOP_CLOSED}</li>
-        </ul>
-      </div>
-      <p className="text-xs text-gray-500 leading-relaxed">{CALLBACK_TEXT}</p>
-      <button onClick={handleNext} className="w-full text-white py-3.5 rounded-xl font-bold" style={primaryButton}>
-        次へ
-      </button>
+            {days.map((day) => {
+              const selected = value.date === day.value;
+              const wColor = selected ? '#fff' : day.w === 0 ? '#ff334b' : day.w === 6 ? '#2e7cf6' : '#8c8c8c';
+              return (
+                <label
+                  key={day.value}
+                  data-day={day.value}
+                  data-selected={selected ? 'true' : undefined}
+                  className={`relative flex h-[76px] w-[58px] cursor-pointer flex-col items-center justify-center rounded-xl border leading-tight transition-colors ${
+                    selected ? 'border-[#06C755] bg-[#06C755] text-white' : 'border-[#dcdcdc] bg-white text-[#111]'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="visitDate"
+                    value={day.value}
+                    checked={selected}
+                    onChange={() => pickDate(day.value)}
+                    className="absolute h-px w-px opacity-0"
+                  />
+                  <span className="text-[11px] font-bold" style={{ color: wColor }}>
+                    {WEEKDAY[day.w]}
+                  </span>
+                  <span className="mt-0.5 text-[16px] font-bold">
+                    {day.m}/{day.d}
+                  </span>
+                  <span className={`mt-0.5 text-[10px] ${selected ? 'text-white' : 'text-[#06C755]'}`}>
+                    {day.value === today ? '今日' : day.d === 1 ? `${day.m}月` : ' '}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          {errors.date && <Hint error>{errors.date}</Hint>}
+        </Row>
+        <Row last>
+          <Label text="来店希望時間" required />
+          <div className="kc-scroll" role="radiogroup" aria-label="来店希望時間" data-testid="sb-times">
+            {VISIT_TIMES.map((t) => {
+              const selected = value.start === t;
+              const past = isPast(t);
+              return (
+                <label
+                  key={t}
+                  className={`relative flex h-11 w-[74px] items-center justify-center rounded-xl border text-[15px] transition-colors ${
+                    past
+                      ? 'cursor-not-allowed border-[#ededed] bg-[#f5f5f5] text-[#c4c4c4]'
+                      : selected
+                        ? 'cursor-pointer border-[#06C755] bg-[#06C755] font-bold text-white'
+                        : 'cursor-pointer border-[#dcdcdc] bg-white text-[#111]'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="visitTime"
+                    value={t}
+                    checked={selected}
+                    disabled={past}
+                    onChange={() => {
+                      onChange({ ...value, start: t });
+                      setErrors({ ...errors, time: undefined });
+                    }}
+                    className="absolute h-px w-px opacity-0"
+                  />
+                  {t}
+                </label>
+              );
+            })}
+          </div>
+          {errors.time && <Hint error>{errors.time}</Hint>}
+          <ul className="mt-3 space-y-0.5 text-[12px] text-[#8c8c8c]" data-testid="sb-shop-hours">
+            <li>営業時間　／　{SHOP_HOURS}</li>
+            <li>定休日　／　{SHOP_CLOSED}</li>
+          </ul>
+        </Row>
+      </Card>
+      <p className="mt-3 px-1 text-[12px] leading-relaxed text-[#8c8c8c]">{CALLBACK_TEXT}</p>
+      <BottomBar>
+        {value.date && value.start && !isPast(value.start) && (
+          <p className="mb-2 text-center text-[13px] text-[#555]" data-testid="sb-picked">
+            {formatJp(value.date)} {value.start}
+          </p>
+        )}
+        <PrimaryButton onClick={handleNext}>次へ</PrimaryButton>
+      </BottomBar>
     </div>
   );
 }
@@ -282,47 +403,23 @@ function KonkatsucafeConfirm({
   ];
 
   return (
-    <div className="space-y-4 sb-slide-up">
-      <button onClick={onBack} className="sb-back-btn">
-        <span aria-hidden>←</span>
-        戻る
-      </button>
-      <div>
-        <h1 className="text-base font-bold text-gray-900">内容のご確認</h1>
-        <p className="text-xs text-gray-500 mt-1">step 3 / {STEPS.length}</p>
-      </div>
-      <div className="sb-card">
-        <dl className="space-y-3 text-sm">
-          {rows.map(([label, value]) => (
+    <div className="sb-slide-up pb-36">
+      <BackLink onClick={onBack} />
+      <PageTitle title="内容のご確認" sub={`step 3 / ${STEPS.length}`} />
+      <Card>
+        <dl>
+          {rows.map(([label, value], i) => (
             <div
               key={label}
-              className="flex justify-between items-center pb-3 border-b border-gray-100 last:border-b-0 last:pb-0"
+              className={`flex items-start justify-between gap-4 py-3.5 ${i < rows.length - 1 ? 'border-b border-[#efefef]' : ''}`}
             >
-              <dt className="text-gray-500 text-xs shrink-0 mr-3">{label}</dt>
-              <dd className="text-gray-900 text-right break-words whitespace-pre-wrap min-w-0">{value}</dd>
+              <dt className="shrink-0 text-[13px] text-[#8c8c8c]">{label}</dt>
+              <dd className="min-w-0 whitespace-pre-wrap break-words text-right text-[15px] text-[#111]">{value}</dd>
             </div>
           ))}
         </dl>
-      </div>
-      {error && (
-        <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-700 text-sm" role="alert">
-          {error.text}
-          {error.toDatetime && (
-            <button onClick={onDatetime} className="block mt-2 font-semibold underline">
-              日時を選び直す
-            </button>
-          )}
-        </div>
-      )}
-      <button
-        onClick={handleSubmit}
-        disabled={submitting}
-        className="w-full text-white py-3.5 rounded-xl font-bold disabled:opacity-50"
-        style={primaryButton}
-      >
-        {submitting ? '送信中…' : 'この内容で送信する'}
-      </button>
-      <p className="text-xs text-gray-500 text-center leading-relaxed">
+      </Card>
+      <p className="mt-3 px-1 text-[12px] leading-relaxed text-[#8c8c8c]">
         {CALLBACK_TEXT}
         {demoNotice && (
           <>
@@ -331,6 +428,21 @@ function KonkatsucafeConfirm({
           </>
         )}
       </p>
+      {error && (
+        <div className="mt-3 rounded-xl bg-[#fff0f2] px-4 py-3 text-[14px] text-[#e0203f]" role="alert">
+          {error.text}
+          {error.toDatetime && (
+            <button type="button" onClick={onDatetime} className="mt-2 block font-bold underline">
+              日時を選び直す
+            </button>
+          )}
+        </div>
+      )}
+      <BottomBar>
+        <PrimaryButton onClick={handleSubmit} disabled={submitting}>
+          {submitting ? '送信中…' : 'この内容で送信する'}
+        </PrimaryButton>
+      </BottomBar>
     </div>
   );
 }
@@ -354,30 +466,28 @@ function KonkatsucafeDone({ demoNotice }: { demoNotice: boolean }) {
     window.close();
   }
   return (
-    <div className="sb-fade-in pt-8 pb-4">
-      <div className="sb-card text-center">
+    <div className="sb-fade-in pt-6">
+      <Card className="py-8 text-center">
         <div
-          className="w-16 h-16 mx-auto rounded-full flex items-center justify-center text-white text-3xl font-bold"
+          className="mx-auto flex h-16 w-16 items-center justify-center rounded-full text-3xl font-bold text-white"
           style={{ background: '#06C755' }}
         >
           ✓
         </div>
-        <h1 className="text-lg font-bold text-gray-900 mt-4">ご予約を受け付けました</h1>
-        <p className="text-sm text-gray-600 mt-3 leading-relaxed">{CALLBACK_TEXT}</p>
-        {demoNotice && <p className="text-xs text-gray-500 mt-2">{DEMO_NOTICE}</p>}
-        <div className="grid grid-cols-2 gap-2 mt-6">
+        <h1 className="mt-4 text-[18px] font-bold text-[#111]">ご予約を受け付けました</h1>
+        <p className="mt-3 text-[14px] leading-relaxed text-[#555]">{CALLBACK_TEXT}</p>
+        {demoNotice && <p className="mt-2 text-[12px] text-[#8c8c8c]">{DEMO_NOTICE}</p>}
+        <div className="mt-6 flex flex-col gap-2.5">
+          <PrimaryButton onClick={close}>トークにもどる</PrimaryButton>
           <button
+            type="button"
             onClick={gotoHistory}
-            className="py-3 rounded-xl font-semibold text-sm border-2 sb-line-green-text"
-            style={{ borderColor: '#06C755' }}
+            className="block h-[52px] w-full rounded-xl border border-[#dcdcdc] bg-white text-[15px] font-bold text-[#111]"
           >
             予約の確認
           </button>
-          <button onClick={close} className="py-3 rounded-xl font-semibold text-sm text-white" style={primaryButton}>
-            閉じる
-          </button>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

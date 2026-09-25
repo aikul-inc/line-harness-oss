@@ -13,6 +13,8 @@ export interface SalonBookingContext {
   idToken: string;
   /** konkatsucafe fork (L-08): LINE のプロフィール名。「LINE名」の初期値に使う（本人が直せる） */
   displayName?: string;
+  /** konkatsucafe fork (L-08 s3): LINE のプロフィールのアイコン。「LINE名」欄に名前と並べて出す */
+  pictureUrl?: string;
 }
 
 const Ctx = createContext<SalonBookingContext | null>(null);

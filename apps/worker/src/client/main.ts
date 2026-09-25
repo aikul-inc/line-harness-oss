@@ -434,6 +434,7 @@ async function initSalonBooking(): Promise<void> {
     lineUserId: profile.userId,
     idToken,
     displayName: profile.displayName,
+    pictureUrl: profile.pictureUrl,
   });
 }
 
