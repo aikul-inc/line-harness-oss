@@ -28,6 +28,7 @@ import {
 import { sendBookingNotification } from '../services/booking-notifier.js';
 import { insertConfirmationReminders } from '../services/booking-confirm.js';
 import { attachTagAndFireSideEffects } from '../services/friend-tag-attach.js';
+import { registerExistingFollowerForBooking } from '../services/booking-friend.js';
 import {
   DEFAULT_ACCOUNT_SETTINGS,
   IDEMPOTENCY_TTL_MINUTES,
@@ -379,7 +380,16 @@ booking.post('/api/liff/booking/requests', async (c) => {
   if (!body.menu_id || !body.staff_id || !body.starts_at) {
     return c.json({ error: 'missing_params' }, 400);
   }
-  const friendId = await resolveFriendId(c, callerLineUserId, accountId);
+  // konkatsucafe fork: L Harness 導入前からの友だち（friends 行なし）は、LINE の
+  // プロフィール照会で友だちと確かめられたときだけ登録して予約を続ける。
+  let friendId = await resolveFriendId(c, callerLineUserId, accountId);
+  if (!friendId) {
+    const registered = await registerExistingFollowerForBooking(c.env.DB, {
+      lineUserId: callerLineUserId,
+      accountId,
+    });
+    if (registered.registered) friendId = registered.friendId;
+  }
   if (!friendId) return c.json({ error: 'friend_not_found' }, 404);
 
   // Idempotency lookup は account+friend スコープ。同じ key を別 caller が送っても
