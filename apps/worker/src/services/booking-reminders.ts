@@ -3,6 +3,7 @@
 // the notification text renderer needs in one query.
 
 import {
+  notificationCardOf,
   notificationStyleOf,
   type BookingNotificationSender,
   type NotificationKind,
@@ -20,6 +21,7 @@ interface DueRow {
   channel_access_token: string;
   line_user_id: string;
   intake_json: string | null;
+  liff_id: string | null;
 }
 
 export interface ProcessRemindersParams {
@@ -44,7 +46,7 @@ export async function processDueReminders(
   const due = await db
     .prepare(
       `SELECT r.id, r.booking_id, r.kind, r.retry_count,
-              b.starts_at, b.intake_json,
+              b.starts_at, b.intake_json, la.liff_id,
               m.name AS menu_name,
               s.display_name AS staff_name,
               la.channel_access_token,
@@ -80,6 +82,8 @@ export async function processDueReminders(
           hoursBefore: params.reminderHoursBefore,
           // konkatsucafe fork (L-08): お客様情報つきの予約はメニュー・担当を見せない
           style: notificationStyleOf(row.intake_json),
+          // konkatsucafe fork (L-11): カードに載せる値（電話番号は載せない）
+          card: notificationCardOf(row.intake_json, row.liff_id),
         },
       });
       await db

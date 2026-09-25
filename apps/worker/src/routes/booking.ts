@@ -25,7 +25,11 @@ import {
   findIdempotencyResponse,
   saveIdempotencyResponse,
 } from '../services/booking-idempotency.js';
-import { notificationStyleOf, sendBookingNotification } from '../services/booking-notifier.js';
+import {
+  notificationCardOf,
+  notificationStyleOf,
+  sendBookingNotification,
+} from '../services/booking-notifier.js';
 import { insertConfirmationReminders } from '../services/booking-confirm.js';
 import { attachTagAndFireSideEffects } from '../services/friend-tag-attach.js';
 import { registerExistingFollowerForBooking } from '../services/booking-friend.js';
@@ -279,7 +283,7 @@ async function notifyForBooking(
 ): Promise<void> {
   const row = await db
     .prepare(
-      `SELECT b.starts_at, b.intake_json,
+      `SELECT b.starts_at, b.intake_json, la.liff_id,
               m.name AS menu_name,
               s.display_name AS staff_name,
               la.channel_access_token,
@@ -299,6 +303,7 @@ async function notifyForBooking(
       channel_access_token: string;
       line_user_id: string;
       intake_json: string | null;
+      liff_id: string | null;
     }>();
   if (!row) return;
   await sendBookingNotification({
@@ -312,6 +317,8 @@ async function notifyForBooking(
       hoursBefore: 0,
       // konkatsucafe fork (L-08): お客様情報つきの予約はメニュー・担当を見せない
       style: notificationStyleOf(row.intake_json),
+      // konkatsucafe fork (L-11): カードに載せる値（電話番号は載せない）
+      card: notificationCardOf(row.intake_json, row.liff_id),
     },
   });
 }

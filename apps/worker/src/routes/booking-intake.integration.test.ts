@@ -82,7 +82,22 @@ function setup(options: { intake?: string } = { intake: 'konkatsucafe' }) {
     'user-other': 'Other Friend',
     'user-early': 'Early Staff',
   };
-  const pushes: Array<{ to: string; text: string }> = [];
+  // konkatsucafe fork (L-11): 控えはカード（Flex）で届く。text にはカードの文字（altText と本文・ボタン）をつないで入れる
+  const pushes: Array<{ to: string; text: string; type: string; message: Record<string, unknown> }> = [];
+  const flatten = (node: unknown): string[] => {
+    if (Array.isArray(node)) return node.flatMap(flatten);
+    if (!node || typeof node !== 'object') return [];
+    const o = node as Record<string, unknown>;
+    return [
+      ...(typeof o.altText === 'string' ? [o.altText] : []),
+      ...(typeof o.text === 'string' ? [o.text] : []),
+      ...(typeof o.label === 'string' ? [o.label] : []),
+      ...(typeof o.uri === 'string' ? [o.uri] : []),
+      ...Object.entries(o)
+        .filter(([k]) => !['altText', 'text', 'label', 'uri'].includes(k))
+        .flatMap(([, v]) => flatten(v)),
+    ];
+  };
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
     const url = String(input);
     if (url === 'https://api.line.me/oauth2/v2.1/verify') {
@@ -99,8 +114,9 @@ function setup(options: { intake?: string } = { intake: 'konkatsucafe' }) {
       return name ? Response.json({ userId, displayName: name }) : Response.json({}, { status: 404 });
     }
     if (url === 'https://api.line.me/v2/bot/message/push') {
-      const body = JSON.parse(String(init?.body)) as { to: string; messages: Array<{ text: string }> };
-      pushes.push({ to: body.to, text: body.messages[0].text });
+      const body = JSON.parse(String(init?.body)) as { to: string; messages: Array<Record<string, unknown>> };
+      const m = body.messages[0];
+      pushes.push({ to: body.to, text: flatten(m).join('\n'), type: String(m.type), message: m });
       return Response.json({});
     }
     throw Error(`No external egress allowed: ${url}`);
@@ -225,6 +241,13 @@ describe('L-08 konkatsucafe booking flow (local, synthetic)', () => {
       expect(s.pushes[0].text).toContain('お店からお電話でご予約内容を確認のうえ、確定のご連絡をいたします。');
       expect(s.pushes[0].text).not.toMatch(HIDDEN);
       expect(s.pushes[0].text).not.toContain('デモのため');
+      // konkatsucafe fork (L-11): 受付の控えはカード。お名前・人数・予約履歴のボタンが載り、お客さまの電話番号は載らない
+      expect(s.pushes[0].type).toBe('flex');
+      expect(s.pushes[0].text).toContain('架空 花子 様');
+      expect(s.pushes[0].text).toContain('1名');
+      expect(s.pushes[0].text).toContain('予約内容を見る');
+      expect(s.pushes[0].text).toContain(`https://liff.line.me/${LIFF_ID}?liffId=${LIFF_ID}&page=salon-book&view=history`);
+      expect(s.pushes[0].text).not.toMatch(/090|０９０/);
       expect(s.logs.join('\n')).not.toMatch(/090|架空|花子|はなこ/);
     } finally {
       s.sqlite.close();
@@ -251,6 +274,13 @@ describe('L-08 konkatsucafe booking flow (local, synthetic)', () => {
       expect((await s.decide(id, 'approve')).status).toBe(200);
       expect(s.pushes[1].text).toContain('ご予約が確定しました');
       expect(s.pushes[1].text).toContain('※デモのため、実際のご予約にはなりません。');
+      // 確定のカード: 店の住所・地図・電話・予約内容。お客さまの電話番号は載らない
+      expect(s.pushes[1].type).toBe('flex');
+      expect(s.pushes[1].text).toContain('静岡県浜松市中央区海老塚町1-5ルミシアⅡ2階');
+      expect(s.pushes[1].text).toContain('地図を開く');
+      expect(s.pushes[1].text).toContain('tel:0534886450');
+      expect(s.pushes[1].text).toContain('予約内容を見る');
+      expect(s.pushes[1].text).not.toMatch(/090|０９０/);
     } finally {
       s.sqlite.close();
     }
