@@ -7,6 +7,7 @@
 //
 // Worker（受け口の検証）と LIFF の画面（入力欄）の両方から読むので、Worker 専用の型や
 // ブラウザ専用の API には触れない。
+import { shopDayStatus } from './konkatsucafe-holidays.js';
 
 export type IntakeFieldKind =
   | 'text'
@@ -325,17 +326,22 @@ export function visitDateBounds(now: Date): { min: string; max: string } {
 }
 
 /**
- * 来店希望日時が /yoyaku/ の選択肢に入っているか。定休日は止めない（/yoyaku/ と同じ）。
+ * 来店希望日時が受けられるか。日付の範囲と時間の選択肢は /yoyaku/ と同じ。
+ * s4: ふつうの火曜（定休）と、祝日の一覧がまだ無い範囲の火曜は 'closed'（konkatsucafe-holidays.ts）。
  * 'past' は選択肢には入っているが、すでに過ぎた時刻（今日の早い時間）
  */
-export function checkVisitSlot(startsAt: Date, now: Date): 'ok' | 'invalid' | 'past' {
-  if (Number.isNaN(startsAt.getTime())) return 'invalid';
+export function checkVisitSlot(
+  startsAt: Date,
+  now: Date,
+): 'ok' | 'invalid_date' | 'invalid_time' | 'closed' | 'past' {
+  if (Number.isNaN(startsAt.getTime())) return 'invalid_date';
   const jst = new Date(startsAt.getTime() + 9 * 3600_000).toISOString();
   const date = jst.slice(0, 10);
   const time = jst.slice(11, 16);
-  if (jst.slice(16, 23) !== ':00.000' || !VISIT_TIMES.includes(time)) return 'invalid';
+  if (jst.slice(16, 23) !== ':00.000' || !VISIT_TIMES.includes(time)) return 'invalid_time';
   const { min, max } = visitDateBounds(now);
-  if (date < min || date > max) return 'invalid';
+  if (date < min || date > max) return 'invalid_date';
+  if (shopDayStatus(date) === 'closed') return 'closed';
   if (startsAt.getTime() < now.getTime()) return 'past';
   return 'ok';
 }

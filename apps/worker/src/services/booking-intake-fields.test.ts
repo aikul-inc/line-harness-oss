@@ -2,6 +2,7 @@
 // 期待値は konkatsucafe-line の src/data/yoyaku.ts の fields から写した。すべて架空の値。
 import { describe, expect, it } from 'vitest';
 import { renderNotificationText } from './booking-notifier.js';
+import { HOLIDAY_LIST_COVERS_UNTIL, HOLIDAY_TUESDAYS, shopDayStatus } from './konkatsucafe-holidays.js';
 import {
   ASKED_FIELDS,
   VISIT_TIMES,
@@ -185,22 +186,26 @@ describe('visit date/time like /yoyaku/ (L-08 s2)', () => {
   });
 
   it.each([
-    ['2026-09-29', '10:30', 'ok'], // 火曜も選べる（/yoyaku/ と同じ）
+    ['2026-09-29', '10:30', 'closed'], // ふつうの火曜は定休（s4）
+    ['2026-11-03', '10:30', 'ok'], // 祝日の火曜（文化の日）は営業
+    ['2027-11-23', '18:00', 'ok'], // 一覧の最後の祝日の火曜（勤労感謝の日）
+    ['2028-01-04', '14:00', 'closed'], // 一覧がまだ無い範囲の火曜は定休
     ['2028-09-25', '18:00', 'ok'],
+    ['2026-09-30', '10:30', 'ok'],
     ['2026-09-25', '18:00', 'past'], // 今日のすでに過ぎた時間（今は 18:10）
     ['2026-09-25', '17:30', 'past'],
-    ['2026-09-26', '10:00', 'invalid'],
-    ['2026-09-26', '18:30', 'invalid'],
-    ['2026-09-26', '11:15', 'invalid'],
-    ['2028-09-26', '10:30', 'invalid'],
-    ['2026-09-24', '14:00', 'invalid'],
+    ['2026-09-26', '10:00', 'invalid_time'],
+    ['2026-09-26', '18:30', 'invalid_time'],
+    ['2026-09-26', '11:15', 'invalid_time'],
+    ['2028-09-26', '10:30', 'invalid_date'],
+    ['2026-09-24', '14:00', 'invalid_date'],
   ])('%s %s → %s', (d, t, expected) => {
     expect(checkVisitSlot(at(d, t), NOW)).toBe(expected);
   });
 
   it('rejects seconds and broken dates', () => {
-    expect(checkVisitSlot(new Date('2026-10-01T05:00:30Z'), NOW)).toBe('invalid');
-    expect(checkVisitSlot(new Date('nope'), NOW)).toBe('invalid');
+    expect(checkVisitSlot(new Date('2026-10-01T05:00:30Z'), NOW)).toBe('invalid_time');
+    expect(checkVisitSlot(new Date('nope'), NOW)).toBe('invalid_date');
   });
 
   it('formats the notice date in Japanese with the weekday', () => {
@@ -219,5 +224,23 @@ describe('visit date/time like /yoyaku/ (L-08 s2)', () => {
     }
     // 上流の書き方は変えない
     expect(renderNotificationText('requested', ctx)).toContain('メニュー: パンケーキ');
+  });
+});
+
+describe('closed Tuesdays and holiday Tuesdays (L-08 s4)', () => {
+  it('takes holiday Tuesdays only from the Cabinet Office list and treats Tuesdays past the list as closed', () => {
+    expect(HOLIDAY_LIST_COVERS_UNTIL).toBe('2027-12-31');
+    expect(Object.keys(HOLIDAY_TUESDAYS)).toEqual([
+      '2026-05-05', '2026-08-11', '2026-09-22', '2026-11-03', '2027-02-23', '2027-05-04', '2027-11-23',
+    ]);
+    for (const d of Object.keys(HOLIDAY_TUESDAYS)) {
+      expect(new Date(`${d}T00:00:00Z`).getUTCDay()).toBe(2);
+      expect(shopDayStatus(d)).toBe('holiday');
+    }
+    expect(shopDayStatus('2026-09-29')).toBe('closed');
+    expect(shopDayStatus('2026-09-30')).toBe('open');
+    // 2028-01-01 以降は一覧が無い。祝日になりうる火曜（例: 2028-11-03 は金曜なので対象外、2028 年の火曜の祝日も推測しない）
+    expect(shopDayStatus('2028-01-04')).toBe('closed');
+    expect(shopDayStatus('2028-02-29')).toBe('closed');
   });
 });

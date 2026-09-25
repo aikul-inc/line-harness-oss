@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createApi, type BookingHistoryItem } from '../lib/api.js';
 import { useSalonContext } from '../lib/context.js';
 import HistoryCard from '../components/HistoryCard.js';
+import { applyKonkatsucafeTheme } from '../components/kc-ui.js';
 
 export default function BookingHistory() {
   const ctx = useSalonContext();
@@ -10,6 +11,18 @@ export default function BookingHistory() {
   );
   const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming');
   const [error, setError] = useState<string | null>(null);
+
+  // konkatsucafe fork (L-08 s4): konkatsucafe の流れなら、ヘッダーとタブをお店のピンクにする
+  useEffect(() => {
+    createApi(ctx)
+      .menus()
+      .then((r) => {
+        if (r.intake_form) applyKonkatsucafeTheme();
+      })
+      .catch(() => {
+        /* 色だけなので、取れなければ緑のまま */
+      });
+  }, [ctx]);
 
   useEffect(() => {
     setError(null);
@@ -55,7 +68,7 @@ export default function BookingHistory() {
           onClick={() => setTab('upcoming')}
           className="py-3 text-sm font-semibold transition-colors"
           style={{
-            background: tab === 'upcoming' ? '#06C755' : '#fff',
+            background: tab === 'upcoming' ? 'var(--kc-accent, #06C755)' : '#fff',
             color: tab === 'upcoming' ? '#fff' : '#6b7280',
           }}
         >
@@ -65,7 +78,7 @@ export default function BookingHistory() {
           onClick={() => setTab('past')}
           className="py-3 text-sm font-semibold transition-colors"
           style={{
-            background: tab === 'past' ? '#06C755' : '#fff',
+            background: tab === 'past' ? 'var(--kc-accent, #06C755)' : '#fff',
             color: tab === 'past' ? '#fff' : '#6b7280',
           }}
         >

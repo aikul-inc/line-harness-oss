@@ -1,13 +1,21 @@
 // konkatsucafe fork (L-08 s3): 予約画面の部品。LINE 公式アカウントの見た目に寄せる
-// （LINE の緑 #06C755 の主ボタン、白地のカードとやわらかい灰色の区切り、15〜16px の文字）。
+// （白地のカードとやわらかい灰色の区切り、画面下に固定した主ボタン、15〜16px の文字）。
+// s4: 色は LINE の緑からお店のピンクに。正本は konkatsucafe-line の src/styles/global.css の
+// --color-accent-dark（#c94f5a）。白い文字とのコントラスト比は 4.42:1（--color-accent #e2626d は 3.39:1 で
+// 足りないため濃いほうを使う）。薄いピンク #ffdee1 は konkatsucafe-site の --color-brand-soft。
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
-export const LINE_GREEN = '#06C755';
+export const KC_PINK = '#c94f5a';
+
+/** 画面の外側（ヘッダー・予約履歴のタブ）も同じピンクにする。上流の画面は緑のまま */
+export function applyKonkatsucafeTheme(): void {
+  document.documentElement.style.setProperty('--kc-accent', KC_PINK);
+}
 
 /** 入力欄。iOS は 16px 未満だとタップ時に拡大するので下回らせない */
 export const kcInput =
-  'block w-full h-12 rounded-xl border border-[#e3e3e3] bg-[#f7f7f7] px-3.5 text-[16px] text-[#111] placeholder:text-[#b5b5b5] focus:outline-none focus:border-[#06C755] focus:bg-white';
+  'block w-full h-12 rounded-xl border border-[#e3e3e3] bg-[#f7f7f7] px-3.5 text-[16px] text-[#111] placeholder:text-[#b5b5b5] focus:outline-none focus:border-[#c94f5a] focus:bg-white';
 
 /** 白地の角丸カード。中の行はやわらかい灰色の線で区切る */
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
@@ -27,7 +35,8 @@ export function Label({ text, required, htmlFor }: { text: string; required?: bo
   const body = (
     <>
       {text}
-      {required && <span className="ml-1.5 align-middle text-[11px] font-bold text-[#ff334b]">必須</span>}
+      {/* 「必須」は灰色の札。ピンク（選択中）・赤（日曜・エラー）と見分けやすくする */}
+      {required && <span className="ml-1.5 inline-block rounded bg-[#ececec] px-1.5 py-px align-middle text-[10px] font-bold text-[#555]">必須</span>}
     </>
   );
   return htmlFor ? (
@@ -40,7 +49,13 @@ export function Label({ text, required, htmlFor }: { text: string; required?: bo
 }
 
 export function Hint({ children, error = false }: { children: ReactNode; error?: boolean }) {
-  return <p className={`mt-1.5 text-[12px] leading-relaxed ${error ? 'text-[#ff334b]' : 'text-[#8c8c8c]'}`}>{children}</p>;
+  // エラーは赤に「！」の印を付け、選択中のピンクと色だけで見分けさせない
+  return (
+    <p className={`mt-1.5 text-[12px] leading-relaxed ${error ? 'font-bold text-[#d0021b]' : 'text-[#8c8c8c]'}`}>
+      {error && <span aria-hidden>！</span>}
+      {children}
+    </p>
+  );
 }
 
 /**
@@ -69,7 +84,7 @@ export function Chip({
   const state = disabled
     ? 'border-[#ededed] bg-[#f5f5f5] text-[#c4c4c4]'
     : checked
-      ? 'border-[#06C755] bg-[#06C755] text-white font-bold'
+      ? 'border-[#c94f5a] bg-[#c94f5a] text-white font-bold'
       : 'border-[#dcdcdc] bg-white text-[#111]';
   return (
     <label className={`relative flex cursor-pointer items-center justify-center rounded-xl border text-center transition-colors ${state} ${disabled ? 'cursor-not-allowed' : ''} ${className}`}>
@@ -118,7 +133,7 @@ export function PrimaryButton({
       onClick={onClick}
       disabled={disabled}
       className="block h-[52px] w-full rounded-xl text-[16px] font-bold text-white disabled:opacity-50"
-      style={{ background: LINE_GREEN }}
+      style={{ background: KC_PINK }}
     >
       {children}
     </button>

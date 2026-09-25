@@ -207,7 +207,7 @@ export default function IntakeForm({
             <p className="text-[16px] font-bold text-[#111]" data-testid="sb-intake-slot">
               {formatJp(slot.date)} {slot.start}
             </p>
-            <button type="button" onClick={onBack} className="shrink-0 text-[13px] font-bold text-[#06C755]">
+            <button type="button" onClick={onBack} className="shrink-0 text-[13px] font-bold text-[#c94f5a]">
               変更
             </button>
           </div>
@@ -242,11 +242,11 @@ export default function IntakeForm({
               name="agreeTerms"
               checked={value.agreeTerms}
               onChange={(e) => set('agreeTerms', e.target.checked)}
-              className="mt-0.5 h-6 w-6 shrink-0 accent-[#06C755]"
+              className="mt-0.5 h-6 w-6 shrink-0 accent-[#c94f5a]"
             />
             <span className="text-[14px] leading-relaxed text-[#111]">
               {agree.label}
-              <span className="ml-1.5 align-middle text-[11px] font-bold text-[#ff334b]">必須</span>
+<span className="ml-1.5 inline-block rounded bg-[#ececec] px-1.5 py-px align-middle text-[10px] font-bold text-[#555]">必須</span>
             </span>
           </label>
           {err('agreeTerms')}
@@ -294,8 +294,8 @@ export default function IntakeForm({
       </Card>
 
       {errors.length > 0 && (
-        <p className="mt-3 rounded-xl bg-[#fff0f2] px-4 py-3 text-[14px] text-[#e0203f]" role="alert">
-          未入力の項目があります。
+        <p className="mt-3 rounded-xl border border-[#f2b8bf] bg-white px-4 py-3 text-[14px] font-bold text-[#d0021b]" role="alert">
+          ！未入力の項目があります。
         </p>
       )}
 
@@ -326,7 +326,7 @@ function LineProfile({ value, onChange }: { value: string; onChange: (v: string)
           <div
             aria-hidden
             data-testid="sb-line-avatar-fallback"
-            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#e8f8ee] text-[18px] font-bold text-[#06C755]"
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#ffdee1] text-[18px] font-bold text-[#c94f5a]"
           >
             {initial || '?'}
           </div>

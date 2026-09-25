@@ -322,7 +322,8 @@ async function notifyForBooking(
 // - メニュー・担当は選ばせない。アカウントに 1 件ずつあるものを受け口が割り当てる
 //   （0 件や 2 件以上なら設定の誤りとして断る。どれを選ぶかを推測しない）
 // - 枠の上限は設けない（同じ日時に何件でも入る）。日時は /yoyaku/ と同じ選択肢
-//   （来店希望日は今日〜2 年後、時間は 10:30〜18:00 の 30 分刻み、定休日も止めない）
+//   （来店希望日は今日〜2 年後、時間は 10:30〜18:00 の 30 分刻み）。s4: ふつうの火曜は定休として断る
+//   （祝日の火曜は受ける。祝日は内閣府の一覧から: services/konkatsucafe-holidays.ts）
 // - 受付は requested。店舗が電話で確かめてから管理画面で承認・取り消しを決める
 //   （自動の期限切れはしない: services/booking-expirer.ts）
 // ================================================================
@@ -375,8 +376,12 @@ async function konkatsucafeBookingRequest(
 
   const startsAt = new Date(params.startsAtRaw);
   const slot = checkVisitSlot(startsAt, new Date());
-  if (slot === 'invalid') return c.json({ error: 'invalid_visit_datetime' }, 422);
-  if (slot === 'past') return c.json({ error: 'past_datetime' }, 422);
+  // 断るときは項目名だけを返す（値は返さない）
+  if (slot === 'invalid_date') return c.json({ error: 'invalid_visit_datetime', invalid: ['来店希望日'] }, 422);
+  if (slot === 'invalid_time') return c.json({ error: 'invalid_visit_datetime', invalid: ['来店希望時間'] }, 422);
+  // s4: ふつうの火曜（定休）と、祝日の一覧がまだ無い範囲の火曜は受けない（画面の値を信じない）
+  if (slot === 'closed') return c.json({ error: 'closed_day', invalid: ['来店希望日'] }, 422);
+  if (slot === 'past') return c.json({ error: 'past_datetime', invalid: ['来店希望時間'] }, 422);
 
   // お客様情報。足りない・範囲外の項目は短い呼び方だけ返す（値は返さない・ログに出さない）。
   const checked = validateIntake(params.intake, startsAt);

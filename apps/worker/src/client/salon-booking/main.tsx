@@ -37,7 +37,8 @@ function App({ ctx }: { ctx: SalonBookingContext }) {
       <div className="min-h-screen sb-fade-in" style={{ background: '#f5f5f5' }}>
         <header
           className="px-4 py-3 text-white text-center font-bold"
-          style={{ background: '#06C755', fontSize: '15px' }}
+          // konkatsucafe fork (L-08 s4): konkatsucafe の流れではお店のピンク（--kc-accent）。上流は緑のまま
+          style={{ background: 'var(--kc-accent, #06C755)', fontSize: '15px' }}
         >
           {headerLabel}
         </header>

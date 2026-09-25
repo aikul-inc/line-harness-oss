@@ -9,6 +9,7 @@ import { sqliteD1 } from '../test-support/sqlite-d1.js';
 import { runExpirer } from '../services/booking-expirer.js';
 import { processDueReminders } from '../services/booking-reminders.js';
 import { renderNotificationText, type SendNotificationParams } from '../services/booking-notifier.js';
+import { HOLIDAY_LIST_COVERS_UNTIL, HOLIDAY_TUESDAYS } from '../services/konkatsucafe-holidays.js';
 
 const schema = readFileSync(new NodeURL('../../../../packages/db/bootstrap.sql', import.meta.url), 'utf8');
 afterEach(() => vi.restoreAllMocks());
@@ -133,7 +134,8 @@ function setup(options: { intake?: string } = { intake: 'konkatsucafe' }) {
     await Promise.all(pending);
     return r;
   }
-  const date = jstDate(3);
+  // 3 日後。火曜（定休）に当たったら 4 日後にする（s4）
+  const date = new Date(`${jstDate(3)}T00:00:00Z`).getUTCDay() === 2 ? jstDate(4) : jstDate(3);
   const startsAt = at(date, '14:00');
   async function book(idToken: string, extra: Record<string, unknown> = {}) {
     return request(`/api/liff/booking/requests?liffId=${LIFF_ID}`, {
@@ -269,32 +271,65 @@ describe('L-08 konkatsucafe booking flow (local, synthetic)', () => {
     }
   });
 
-  it('accepts /yoyaku/ times on any day incl. Tuesday and up to 2 years ahead; refuses other values', async () => {
+  it('accepts /yoyaku/ times up to 2 years ahead; refuses other values with the field name only', async () => {
     const s = setup();
     try {
-      // 次の火曜（受付時間の決まりには無い曜日）
-      let d = 1;
-      while (new Date(`${jstDate(d)}T00:00:00Z`).getUTCDay() !== 2) d++;
-      await created(await s.book('token-user-known', { starts_at: at(jstDate(d), '10:30') }));
-      await created(await s.book('token-user-known', { starts_at: at(jstDate(d), '18:00') }));
+      // 2 年後の同じ日（火曜なら 1 日前へ。s4 で火曜は別に確かめる）
       const limit = new Date(`${jstDate(0)}T00:00:00Z`);
       limit.setUTCFullYear(limit.getUTCFullYear() + 2);
-      const max = limit.toISOString().slice(0, 10);
+      let max = limit.toISOString().slice(0, 10);
+      if (new Date(`${max}T00:00:00Z`).getUTCDay() === 2) {
+        max = new Date(limit.getTime() - 86400_000).toISOString().slice(0, 10);
+      }
+      await created(await s.book('token-user-known', { starts_at: at(s.date, '10:30') }));
+      await created(await s.book('token-user-known', { starts_at: at(s.date, '18:00') }));
       await created(await s.book('token-user-known', { starts_at: at(max, '14:00') }));
 
       const after = new Date(limit.getTime() + 86400_000).toISOString().slice(0, 10);
-      for (const [date, time] of [
-        [s.date, '10:00'],
-        [s.date, '10:45'],
-        [s.date, '18:30'],
-        [after, '14:00'],
-        [jstDate(-1), '14:00'],
+      for (const [date, time, field] of [
+        [s.date, '10:00', '来店希望時間'],
+        [s.date, '10:45', '来店希望時間'],
+        [s.date, '18:30', '来店希望時間'],
+        [after, '14:00', '来店希望日'],
+        [jstDate(-1), '14:00', '来店希望日'],
       ]) {
         const r = await s.book('token-user-known', { starts_at: at(date, time) });
         expect(r.status).toBe(422);
-        expect(await r.json()).toEqual({ error: 'invalid_visit_datetime' });
+        expect(await r.json()).toEqual({ error: 'invalid_visit_datetime', invalid: [field] });
       }
       expect(s.count('bookings')).toBe(3);
+    } finally {
+      s.sqlite.close();
+    }
+  });
+
+  it('s4: refuses ordinary Tuesdays and Tuesdays past the holiday list; accepts holiday Tuesdays', async () => {
+    const s = setup();
+    try {
+      const limit = new Date(`${jstDate(0)}T00:00:00Z`);
+      limit.setUTCFullYear(limit.getUTCFullYear() + 2);
+      const max = limit.toISOString().slice(0, 10);
+      const tuesdays: string[] = [];
+      for (let d = 1; jstDate(d) <= max; d++) {
+        if (new Date(`${jstDate(d)}T00:00:00Z`).getUTCDay() === 2) tuesdays.push(jstDate(d));
+      }
+      const ordinary = tuesdays.find((d) => d <= HOLIDAY_LIST_COVERS_UNTIL && !HOLIDAY_TUESDAYS[d]);
+      const holiday = tuesdays.find((d) => HOLIDAY_TUESDAYS[d]);
+      const beyond = tuesdays.find((d) => d > HOLIDAY_LIST_COVERS_UNTIL);
+
+      for (const d of [ordinary, beyond]) {
+        if (!d) continue;
+        const r = await s.book('token-user-known', { starts_at: at(d, '14:00') });
+        expect(r.status).toBe(422);
+        expect(await r.json()).toEqual({ error: 'closed_day', invalid: ['来店希望日'] });
+      }
+      expect(ordinary).toBeDefined();
+      expect(s.count('bookings')).toBe(0);
+      expect(s.pushes).toHaveLength(0);
+      if (holiday) {
+        await created(await s.book('token-user-known', { starts_at: at(holiday, '10:30') }));
+        expect(s.count('bookings')).toBe(1);
+      }
     } finally {
       s.sqlite.close();
     }

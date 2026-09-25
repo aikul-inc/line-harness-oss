@@ -2,17 +2,29 @@
 //
 // - メニュー・担当は選ばせない（受け口が割り当てる。画面にも名前を出さない）
 // - 日時は /yoyaku/ と同じ範囲: 来店希望日は今日〜2 年後、時間は 10:30〜18:00。
-//   定休日も選べる（/yoyaku/ と同じく、営業時間・定休日の文を添えるだけ）。満席・空きなしは出さない
+//   s4: ふつうの火曜は「定休」で押せない。祝日の火曜は「祝」の印で押せる（祝日は内閣府の一覧:
+//   services/konkatsucafe-holidays.ts。一覧がまだ無い範囲の火曜は定休）。満席・空きなしは出さない
 // - 送ると「受付」。店舗が電話で確かめてから確定の連絡がトークに届く
 // - s3: 日付・時間は、L Harness を入れる前の自前の予約画面（konkatsucafe-line の src/pages/liff/）と
 //   同じ横スクロールのボタンにした。2 年先まで出すため、月の切り替えを足した（自前は 14 日＋日付欄）。
 //   日付は画面を開いた時点で組み立てる（ビルド時に焼き込まない）
 import { useEffect, useMemo, useRef, useState } from 'react';
 import IntakeForm, { emptyIntake } from '../components/IntakeForm.js';
-import { BackLink, BottomBar, Card, Hint, Label, PageTitle, PrimaryButton, Row } from '../components/kc-ui.js';
+import {
+  BackLink,
+  BottomBar,
+  Card,
+  Hint,
+  Label,
+  PageTitle,
+  PrimaryButton,
+  Row,
+  applyKonkatsucafeTheme,
+} from '../components/kc-ui.js';
 import { useSalonContext } from '../lib/context.js';
 import { createApi, type IntakeDraft } from '../lib/api.js';
 import { formatJp, jstStartsAtIso } from '../lib/datetime.js';
+import { HOLIDAY_TUESDAYS, shopDayStatus } from '../../../services/konkatsucafe-holidays.js';
 import {
   DEMO_NOTICE,
   SHOP_CLOSED,
@@ -40,6 +52,7 @@ function jstNowHHMM(): string {
 
 export default function KonkatsucafeBooking({ demoNotice }: { demoNotice: boolean }) {
   const ctx = useSalonContext();
+  useEffect(() => applyKonkatsucafeTheme(), []);
   const [step, setStep] = useState<Step>('datetime');
   const [slot, setSlot] = useState<{ date: string; start: string }>({ date: '', start: '' });
   const [intake, setIntake] = useState<IntakeDraft>(() => emptyIntake(ctx.displayName));
@@ -91,7 +104,7 @@ function Stepper({ index }: { index: number }) {
               <span
                 aria-hidden
                 className="absolute"
-                style={{ top: 11, left: '-50%', width: '100%', height: 2, background: i <= index ? '#06C755' : '#e0e0e0', zIndex: 0 }}
+                style={{ top: 11, left: '-50%', width: '100%', height: 2, background: i <= index ? '#c94f5a' : '#e0e0e0', zIndex: 0 }}
               />
             )}
             <div
@@ -100,7 +113,7 @@ function Stepper({ index }: { index: number }) {
                 width: 22,
                 height: 22,
                 borderRadius: 9999,
-                background: future ? '#e0e0e0' : '#06C755',
+                background: future ? '#e0e0e0' : '#c94f5a',
                 color: future ? '#999' : '#fff',
                 fontSize: 11,
                 fontWeight: 700,
@@ -257,15 +270,35 @@ function VisitDateTime({
             data-testid="sb-days"
           >
             {days.map((day) => {
-              const selected = value.date === day.value;
-              const wColor = selected ? '#fff' : day.w === 0 ? '#ff334b' : day.w === 6 ? '#2e7cf6' : '#8c8c8c';
+              const status = shopDayStatus(day.value);
+              const closed = status === 'closed';
+              const holiday = status === 'holiday';
+              const selected = !closed && value.date === day.value;
+              const wColor = selected
+                ? '#fff'
+                : closed
+                  ? '#c4c4c4'
+                  : day.w === 0 || holiday
+                    ? '#ff334b'
+                    : day.w === 6
+                      ? '#2e7cf6'
+                      : '#8c8c8c';
+              // 3 行目: 定休 > 祝 > 今日 > 月の 1 日
+              const note = closed ? '定休' : holiday ? '祝' : day.value === today ? '今日' : day.d === 1 ? `${day.m}月` : '\u00a0';
+              const noteColor = selected ? 'text-white' : closed ? 'text-[#b5b5b5]' : holiday ? 'text-[#ff334b]' : 'text-[#c94f5a]';
               return (
                 <label
                   key={day.value}
                   data-day={day.value}
+                  data-status={status}
                   data-selected={selected ? 'true' : undefined}
-                  className={`relative flex h-[76px] w-[58px] cursor-pointer flex-col items-center justify-center rounded-xl border leading-tight transition-colors ${
-                    selected ? 'border-[#06C755] bg-[#06C755] text-white' : 'border-[#dcdcdc] bg-white text-[#111]'
+                  title={holiday ? HOLIDAY_TUESDAYS[day.value] : closed ? '定休日' : undefined}
+                  className={`relative flex h-[76px] w-[58px] flex-col items-center justify-center rounded-xl border leading-tight transition-colors ${
+                    closed
+                      ? 'cursor-not-allowed border-[#ededed] bg-[#f5f5f5] text-[#c4c4c4]'
+                      : selected
+                        ? 'cursor-pointer border-[#c94f5a] bg-[#c94f5a] text-white'
+                        : 'cursor-pointer border-[#dcdcdc] bg-white text-[#111]'
                   }`}
                 >
                   <input
@@ -273,6 +306,8 @@ function VisitDateTime({
                     name="visitDate"
                     value={day.value}
                     checked={selected}
+                    disabled={closed}
+                    aria-label={`${day.m}月${day.d}日（${WEEKDAY[day.w]}）${closed ? ' 定休日' : holiday ? ` ${HOLIDAY_TUESDAYS[day.value]}` : ''}`}
                     onChange={() => pickDate(day.value)}
                     className="absolute h-px w-px opacity-0"
                   />
@@ -282,9 +317,7 @@ function VisitDateTime({
                   <span className="mt-0.5 text-[16px] font-bold">
                     {day.m}/{day.d}
                   </span>
-                  <span className={`mt-0.5 text-[10px] ${selected ? 'text-white' : 'text-[#06C755]'}`}>
-                    {day.value === today ? '今日' : day.d === 1 ? `${day.m}月` : ' '}
-                  </span>
+                  <span className={`mt-0.5 text-[10px] font-bold ${noteColor}`}>{note}</span>
                 </label>
               );
             })}
@@ -304,7 +337,7 @@ function VisitDateTime({
                     past
                       ? 'cursor-not-allowed border-[#ededed] bg-[#f5f5f5] text-[#c4c4c4]'
                       : selected
-                        ? 'cursor-pointer border-[#06C755] bg-[#06C755] font-bold text-white'
+                        ? 'cursor-pointer border-[#c94f5a] bg-[#c94f5a] font-bold text-white'
                         : 'cursor-pointer border-[#dcdcdc] bg-white text-[#111]'
                   }`}
                 >
@@ -379,7 +412,7 @@ function KonkatsucafeConfirm({
         setError({
           text: 'ご入力内容を確認できませんでした。お手数ですが、入力内容をお確かめのうえ、もう一度お試しください。',
         });
-      } else if (err.status === 422 && (code === 'past_datetime' || code === 'invalid_visit_datetime')) {
+      } else if (err.status === 422 && (code === 'past_datetime' || code === 'invalid_visit_datetime' || code === 'closed_day')) {
         setError({ text: 'ご希望の日時を選び直してください。', toDatetime: true });
       } else {
         setError({ text: '送信できませんでした。時間をおいて、もう一度お試しください。' });
@@ -429,8 +462,8 @@ function KonkatsucafeConfirm({
         )}
       </p>
       {error && (
-        <div className="mt-3 rounded-xl bg-[#fff0f2] px-4 py-3 text-[14px] text-[#e0203f]" role="alert">
-          {error.text}
+        <div className="mt-3 rounded-xl border border-[#f2b8bf] bg-white px-4 py-3 text-[14px] font-bold text-[#d0021b]" role="alert">
+          ！{error.text}
           {error.toDatetime && (
             <button type="button" onClick={onDatetime} className="mt-2 block font-bold underline">
               日時を選び直す
@@ -470,7 +503,7 @@ function KonkatsucafeDone({ demoNotice }: { demoNotice: boolean }) {
       <Card className="py-8 text-center">
         <div
           className="mx-auto flex h-16 w-16 items-center justify-center rounded-full text-3xl font-bold text-white"
-          style={{ background: '#06C755' }}
+          style={{ background: '#c94f5a' }}
         >
           ✓
         </div>
