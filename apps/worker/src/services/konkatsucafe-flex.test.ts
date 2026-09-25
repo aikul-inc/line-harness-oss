@@ -116,6 +116,25 @@ describe('konkatsucafe の控えのカード', () => {
     expect(konkatsucafeImageBase(undefined)).toBeNull();
   });
 
+  test('s3: 進み具合は同じ幅の 3 列。丸の行は列の幅いっぱい（線は左右半分ずつ）、ラベルは列の中央', () => {
+    const find = (n: unknown): Record<string, any> | null => {
+      if (Array.isArray(n)) { for (const x of n) { const r = find(x); if (r) return r; } return null; }
+      if (!n || typeof n !== 'object') return null;
+      const o = n as Record<string, any>;
+      if (o.layout === 'horizontal' && o.contents?.length === 3 && o.contents.every((c: any) => c.layout === 'vertical' && c.flex === 1 && c.alignItems === undefined)) return o;
+      return find(Object.values(o));
+    };
+    for (const k of ['requested', 'approved'] as const) {
+      const bar = find(buildKonkatsucafeFlex(k, INPUT)!.contents)!;
+      expect(bar).not.toBeNull();
+      expect(bar.contents.map((c: any) => c.contents[1].text)).toEqual(['受付', 'お電話で確認', '確定']);
+      for (const c of bar.contents) {
+        expect(c.contents[1]).toMatchObject({ align: 'center', wrap: true });
+        expect(c.contents[0].contents.map((x: any) => x.flex)).toEqual([1, 0, 1]);
+      }
+    }
+  });
+
   test('色はお店のピンク #c94f5a', () => {
     expect(JSON.stringify(buildKonkatsucafeFlex('approved', INPUT))).toContain('#c94f5a');
   });

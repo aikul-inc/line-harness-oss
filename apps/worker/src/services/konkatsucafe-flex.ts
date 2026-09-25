@@ -187,55 +187,65 @@ function dateBlock(label: string, startsAtJst: string): Node | null {
   };
 }
 
-/** 受付 → お電話で確認 → 確定 の進み具合。done は済んだ段の数（1〜3） */
+/**
+ * 受付 → お電話で確認 → 確定 の進み具合。done は済んだ段の数（1〜3）。
+ * 3 段を同じ幅（flex 1）の列にし、列の中で丸とラベルを縦に並べて中央に揃える（s3: 実機で端のラベルがずれたため）。
+ * 線は各列の丸の左右に半分ずつ置き（端の列の外側は透明）、丸の高さの中央に合わせる。線はラベルの位置に関わらない
+ */
 function stepBar(done: 1 | 2 | 3): Node {
-  const dot = (n: number): Node => ({
+  const seg = (i: number, visible: boolean): Node => ({
     type: 'box',
     layout: 'vertical',
-    width: '24px',
-    height: '24px',
-    cornerRadius: '12px',
-    justifyContent: 'center',
-    backgroundColor: n <= done ? ACCENT : LINE_GRAY,
-    contents: [{ type: 'text', text: String(n), size: 'xs', weight: 'bold', color: '#ffffff', align: 'center' }],
-  });
-  const line = (n: number): Node => ({
-    type: 'box',
-    layout: 'vertical',
-    height: '3px',
     flex: 1,
-    backgroundColor: n < done ? ACCENT : LINE_GRAY,
+    height: '3px',
+    backgroundColor: visible ? (i < done ? ACCENT : LINE_GRAY) : '#ffffff00',
     contents: [],
   });
-  const label = (text: string, n: number, align: string): Node => ({
-    type: 'text',
-    text,
-    size: 'xxs',
-    flex: 1,
-    align,
-    color: n <= done ? ACCENT : MUTED,
-    weight: n === done ? 'bold' : 'regular',
-  });
-  return {
+  const column = (n: 1 | 2 | 3, text: string): Node => ({
     type: 'box',
     layout: 'vertical',
+    flex: 1,
+    // alignItems は付けない（付けると丸の行が中身の幅に縮み、線が消える）。行は列の幅いっぱい、ラベルは align で中央
     spacing: 'xs',
-    margin: 'md',
     contents: [
       {
         type: 'box',
         layout: 'horizontal',
         alignItems: 'center',
-        paddingStart: 'lg',
-        paddingEnd: 'lg',
-        contents: [dot(1), line(1), dot(2), line(2), dot(3)],
+        contents: [
+          seg(n - 1, n > 1),
+          {
+            type: 'box',
+            layout: 'vertical',
+            width: '24px',
+            height: '24px',
+            flex: 0,
+            cornerRadius: '12px',
+            justifyContent: 'center',
+            alignItems: 'center',
+            backgroundColor: n <= done ? ACCENT : LINE_GRAY,
+            contents: [{ type: 'text', text: String(n), size: 'xs', weight: 'bold', color: '#ffffff', align: 'center', gravity: 'center' }],
+          },
+          seg(n, n < 3),
+        ],
       },
       {
-        type: 'box',
-        layout: 'horizontal',
-        contents: [label('受付', 1, 'start'), label('お電話で確認', 2, 'center'), label('確定', 3, 'end')],
+        type: 'text',
+        text,
+        size: 'xxs',
+        align: 'center',
+        gravity: 'top',
+        wrap: true,
+        color: n <= done ? ACCENT : MUTED,
+        weight: n === done ? 'bold' : 'regular',
       },
     ],
+  });
+  return {
+    type: 'box',
+    layout: 'horizontal',
+    margin: 'md',
+    contents: [column(1, '受付'), column(2, 'お電話で確認'), column(3, '確定')],
   };
 }
 
