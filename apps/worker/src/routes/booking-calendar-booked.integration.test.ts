@@ -113,8 +113,8 @@ function setup(
     }
     if (url.startsWith(PROFILE)) return Response.json({}, { status: 404 });
     if (url === 'https://api.line.me/v2/bot/message/push') {
-      const body = JSON.parse(String(init?.body)) as { to: string; messages: Array<{ text: string }> };
-      pushes.push({ to: body.to, text: body.messages[0].text });
+      const body = JSON.parse(String(init?.body)) as { to: string; messages: unknown[] };
+      pushes.push({ to: body.to, text: JSON.stringify(body.messages[0]) });
       return Response.json({});
     }
     if (url === ADAPTER) {
