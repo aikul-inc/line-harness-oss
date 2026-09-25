@@ -1,6 +1,11 @@
 import { LineApiError, LineClient } from '@line-crm/line-sdk';
 import { DEMO_NOTICE, formatVisitJst } from './booking-intake-fields.js';
-import { buildKonkatsucafeFlex, cardValuesOf, konkatsucafeHistoryUrl } from './konkatsucafe-flex.js';
+import {
+  buildKonkatsucafeFlex,
+  cardValuesOf,
+  konkatsucafeHistoryUrl,
+  konkatsucafeImageBase,
+} from './konkatsucafe-flex.js';
 
 export type NotificationKind =
   | 'requested'
@@ -24,16 +29,22 @@ export interface NotificationContext {
    * konkatsucafe fork (L-11): カードに載せる値（style があるときだけ使う）。
    * お名前・人数は intake_json から、予約履歴の URL は line_accounts.liff_id から。電話番号は載せない
    */
-  card?: { name?: string; visitCount?: string; historyUrl?: string | null };
+  card?: { name?: string; visitCount?: string; historyUrl?: string | null; imageBase?: string | null };
 }
 
 /** konkatsucafe fork (L-11): SQL で読んだ intake_json と liff_id から、カードに載せる値を作る */
 export function notificationCardOf(
   intakeJson: string | null | undefined,
   liffId: string | null | undefined,
+  workerUrl?: string | null,
 ): NotificationContext['card'] {
   if (!intakeJson) return undefined;
-  return { ...cardValuesOf(intakeJson), historyUrl: konkatsucafeHistoryUrl(liffId) };
+  return {
+    ...cardValuesOf(intakeJson),
+    historyUrl: konkatsucafeHistoryUrl(liffId),
+    // konkatsucafe fork (booking-notice-flex s2): 写真・アイコンの置き場（無ければ画像なしで組む）
+    imageBase: konkatsucafeImageBase(workerUrl),
+  };
 }
 
 /** konkatsucafe fork (L-08): bookings の intake_json から控えの書き方を決める（SQL で読んだ値を渡す） */
@@ -112,6 +123,7 @@ export function renderNotificationMessage(
     name: ctx.card?.name,
     visitCount: ctx.card?.visitCount,
     historyUrl: ctx.card?.historyUrl ?? null,
+    imageBase: ctx.card?.imageBase ?? null,
   });
 }
 

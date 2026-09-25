@@ -28,6 +28,8 @@ export interface ProcessRemindersParams {
   now: Date;
   sender: BookingNotificationSender;
   reminderHoursBefore: number;
+  /** konkatsucafe fork (booking-notice-flex s2): カードの写真・アイコンの置き場に使う */
+  workerUrl?: string;
 }
 
 const JST_OFFSET_MS = 9 * 3600_000;
@@ -83,7 +85,7 @@ export async function processDueReminders(
           // konkatsucafe fork (L-08): お客様情報つきの予約はメニュー・担当を見せない
           style: notificationStyleOf(row.intake_json),
           // konkatsucafe fork (L-11): カードに載せる値（電話番号は載せない）
-          card: notificationCardOf(row.intake_json, row.liff_id),
+          card: notificationCardOf(row.intake_json, row.liff_id, params.workerUrl),
         },
       });
       await db

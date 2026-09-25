@@ -114,6 +114,7 @@ export async function scheduled(
       now: new Date(),
       sender: sendBookingNotification,
       reminderHoursBefore: DEFAULT_ACCOUNT_SETTINGS.reminder_hours_before,
+      workerUrl: env.WORKER_URL,
     });
     if (result.sent + result.failed > 0) {
       console.log(`[booking-reminders] sent=${result.sent} failed=${result.failed}`);

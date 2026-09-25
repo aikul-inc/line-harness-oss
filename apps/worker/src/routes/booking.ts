@@ -280,6 +280,7 @@ async function notifyForBooking(
   db: D1Database,
   bookingId: string,
   kind: 'requested' | 'approved' | 'rejected',
+  workerUrl?: string,
 ): Promise<void> {
   const row = await db
     .prepare(
@@ -318,7 +319,7 @@ async function notifyForBooking(
       // konkatsucafe fork (L-08): お客様情報つきの予約はメニュー・担当を見せない
       style: notificationStyleOf(row.intake_json),
       // konkatsucafe fork (L-11): カードに載せる値（電話番号は載せない）
-      card: notificationCardOf(row.intake_json, row.liff_id),
+      card: notificationCardOf(row.intake_json, row.liff_id, workerUrl),
     },
   });
 }
@@ -461,7 +462,7 @@ async function konkatsucafeBookingRequest(
     }),
   );
   c.executionCtx.waitUntil(
-    notifyForBooking(c.env.DB, bookingId, 'requested').catch((err) =>
+    notifyForBooking(c.env.DB, bookingId, 'requested', c.env.WORKER_URL).catch((err) =>
       console.error('booking notify (requested) failed:', err),
     ),
   );
@@ -753,7 +754,7 @@ booking.post('/api/liff/booking/requests', async (c) => {
 
   // Fire-and-forget notification — failures must not roll back the booking.
   c.executionCtx.waitUntil(
-    notifyForBooking(c.env.DB, bookingId, 'requested').catch((err) =>
+    notifyForBooking(c.env.DB, bookingId, 'requested', c.env.WORKER_URL).catch((err) =>
       console.error('booking notify (requested) failed:', err),
     ),
   );
@@ -1189,7 +1190,7 @@ booking.post('/api/booking/admin/bookings', async (c) => {
     console.error('Google Calendar sync (proxy-create) failed:', error);
   }
   c.executionCtx.waitUntil(
-    notifyForBooking(c.env.DB, bookingId, 'approved').catch((err) =>
+    notifyForBooking(c.env.DB, bookingId, 'approved', c.env.WORKER_URL).catch((err) =>
       console.error('booking notify (proxy-create) failed:', err),
     ),
   );
@@ -1875,13 +1876,13 @@ booking.patch('/api/booking/admin/requests/:id', async (c) => {
       console.error('Google Calendar sync (approve) failed:', error);
     }
     c.executionCtx.waitUntil(
-      notifyForBooking(c.env.DB, id, 'approved').catch((err) =>
+      notifyForBooking(c.env.DB, id, 'approved', c.env.WORKER_URL).catch((err) =>
         console.error('booking notify (approved) failed:', err),
       ),
     );
   } else if (next === 'rejected') {
     c.executionCtx.waitUntil(
-      notifyForBooking(c.env.DB, id, 'rejected').catch((err) =>
+      notifyForBooking(c.env.DB, id, 'rejected', c.env.WORKER_URL).catch((err) =>
         console.error('booking notify (rejected) failed:', err),
       ),
     );

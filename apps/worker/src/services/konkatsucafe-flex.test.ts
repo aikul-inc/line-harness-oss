@@ -6,11 +6,13 @@ import {
   FLEX_BUBBLE_MAX_BYTES,
   KONKATSUCAFE_SHOP,
   konkatsucafeHistoryUrl,
+  konkatsucafeImageBase,
 } from './konkatsucafe-flex.js';
 import { notificationCardOf, sendBookingNotification, type NotificationKind } from './booking-notifier.js';
 
 const HISTORY = konkatsucafeHistoryUrl('2011738064-qanf1Prm');
-const INPUT = { startsAtJst: '2026-10-03 14:00', demo: true, name: '架空 花子', visitCount: '1名', historyUrl: HISTORY };
+const IMG = konkatsucafeImageBase('https://konkatsucafe-line-harness-demo.disk-portfolio.workers.dev');
+const INPUT = { startsAtJst: '2026-10-03 14:00', demo: true, name: '架空 花子', visitCount: '1名', historyUrl: HISTORY, imageBase: IMG };
 const KINDS: NotificationKind[] = ['requested', 'approved', 'rejected', 'expired', 'day_before', 'hours_before'];
 
 function texts(node: unknown): string[] {
@@ -41,7 +43,7 @@ describe('konkatsucafe の控えのカード', () => {
     expect(m.type).toBe('flex');
     expect(m.altText).toBe('ご予約を受け付けました（2026年10月3日(土) 14:00）');
     const t = texts(m.contents).join('\n');
-    for (const s of ['ご予約を受け付けました', '来店希望日時', '2026年10月3日(土) 14:00', '架空 花子 様', '1名',
+    for (const s of ['ご予約を受け付けました', '来店希望日時', '10月', '3', '土曜日', '14:00', '2026年10月3日(土)', '架空 花子 様', '1名',
       'お店からお電話でご予約内容を確認のうえ、確定のご連絡をいたします。', '※デモのため、実際のご予約にはなりません。']) {
       expect(t).toContain(s);
     }
@@ -85,6 +87,33 @@ describe('konkatsucafe の控えのカード', () => {
     expect(texts(m.contents).join('\n')).not.toContain('デモのため');
     expect(buttons(m.contents)).toEqual([]);
     expect((m.contents as Record<string, unknown>).footer).toBeUndefined();
+  });
+
+  test('s2: 写真（hero）の上に札、受付は 1 段目・確定は 3 段目の進み具合、アイコンつき', () => {
+    const r = buildKonkatsucafeFlex('requested', INPUT)!.contents as Record<string, any>;
+    expect(r.hero.contents[0]).toMatchObject({ type: 'image', url: `${IMG}konkatsucafe-notice-hero-v1.jpg` });
+    expect(texts(r.hero).join()).toContain('受付');
+    const json = JSON.stringify(r);
+    expect(json).toContain('konkatsucafe-notice-person-v1.png');
+    const steps = (c: Record<string, any>) =>
+      JSON.stringify(c).match(/"backgroundColor":"#c94f5a","contents":\[\{"type":"text","text":"[123]"/g)?.length ?? 0;
+    expect(steps(r)).toBe(1);
+    const a = buildKonkatsucafeFlex('approved', INPUT)!.contents as Record<string, any>;
+    expect(steps(a)).toBe(3);
+    expect(texts(a.hero).join()).toContain('確定');
+    expect(JSON.stringify(a)).toContain('konkatsucafe-notice-pin-v1.png');
+    expect(texts(buildKonkatsucafeFlex('rejected', INPUT)!.contents).join()).not.toContain('お電話で確認');
+  });
+
+  test('s2: 画像の置き場が無くても、情報は欠けない（写真・アイコンなし、札は本文へ）', () => {
+    const withImg = texts(buildKonkatsucafeFlex('approved', INPUT)!.contents).filter((t) => !t.startsWith('https://konkatsucafe-line-harness-demo'));
+    const m = buildKonkatsucafeFlex('approved', { ...INPUT, imageBase: null })!;
+    const c = m.contents as Record<string, any>;
+    expect(c.hero).toBeUndefined();
+    expect(JSON.stringify(c)).not.toMatch(/"type":"(image|icon)"/);
+    expect(texts(c).sort()).toEqual(withImg.sort());
+    expect(konkatsucafeImageBase('http://x.example')).toBeNull();
+    expect(konkatsucafeImageBase(undefined)).toBeNull();
   });
 
   test('色はお店のピンク #c94f5a', () => {
