@@ -22,6 +22,7 @@ import { createLiffQueryReader } from '../lib/liff-query.js';
 import { initBooking } from './booking.js';
 import { initForm } from './form.js';
 import { safeRedirectTarget } from '../lib/safe-redirect.js';
+import { isTrackedLinkRedirect, waitForLinkBeforeRedirect } from './redirect-wait.js';
 
 declare const liff: {
   init(config: { liffId: string }): Promise<void>;
@@ -293,12 +294,10 @@ async function linkAndAddFlow() {
 
     // 3. Redirect flow (for wrapped URLs)
     if (redirectUrl) {
-      await Promise.race([
-        linkPromise,
-        new Promise((r) => setTimeout(r, 500)),
-      ]);
+      // konkatsucafe fork (L-06): 計測リンクへ戻るときは、前からの友だちの登録を待つ（最長 3 秒）
+      await waitForLinkBeforeRedirect(linkPromise, redirectUrl);
       // Append LINE userId to tracking links so clicks are attributed
-      if (redirectUrl.includes('/t/')) {
+      if (isTrackedLinkRedirect(redirectUrl)) {
         const sep = redirectUrl.includes('?') ? '&' : '?';
         window.location.href = `${redirectUrl}${sep}lu=${encodeURIComponent(profile.userId)}`;
       } else {

@@ -33,6 +33,7 @@ import { attachTagAndFireSideEffects } from '../services/friend-tag-attach.js';
 import { pushImmediateFirstStep } from '../services/immediate-first-step.js';
 import { notifyAffiliateFriendAdd } from '../services/affiliate-notifier.js';
 import { verifyCallerLineUserId } from '../services/liff-auth.js';
+import { registerExistingFollowerForBooking } from '../services/booking-friend.js';
 import { awardActivityMileage } from '../services/activity-mileage.js';
 import { safeRedirectTarget } from '../lib/safe-redirect.js';
 import { isReservedRef } from '../lib/reserved-refs.js';
@@ -1252,9 +1253,22 @@ liffRoutes.post('/api/liff/link', async (c) => {
     const matchedAccount = matchedLoginChannelId
       ? dbAccounts.find((a) => a.login_channel_id === matchedLoginChannelId) ?? null
       : null;
-    const friend = await getFriendByLineUserIdForAccount(
+    let friend = await getFriendByLineUserIdForAccount(
       db, lineUserId, matchedAccount?.id ?? null,
     );
+    // konkatsucafe fork (L-06): L Harness より前からの友だちは follow が届いておらず行がない。
+    // 計測リンクから LIFF を開いたときに行がないと、クリックも広告値もその人に残らない。
+    // 予約の送信時（L-07）と同じ 2 条件（IDトークン検証済み・そのアカウントのプロフィール照会 200）
+    // が揃ったときだけ登録する。登録アカウントのない旧構成や、別アカウントの行がある人は従来どおり断る。
+    if (!friend && matchedAccount) {
+      const registered = await registerExistingFollowerForBooking(db, {
+        lineUserId,
+        accountId: matchedAccount.id,
+      });
+      if (registered.registered) {
+        friend = await getFriendByLineUserIdForAccount(db, lineUserId, matchedAccount.id);
+      }
+    }
     if (!friend) {
       return c.json({ success: false, error: 'Friend not found' }, 404);
     }
