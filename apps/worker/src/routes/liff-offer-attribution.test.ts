@@ -57,7 +57,7 @@ const DB = {
 
 const LOGIN_CHANNEL_ID = '2000000000';
 
-const env = {
+const env = { DELIVERY_MODE: 'enabled',
   DB,
   LIFF_URL: 'https://liff.line.me/1000000000-DefaultAA',
   WORKER_URL: 'https://worker.example.com',

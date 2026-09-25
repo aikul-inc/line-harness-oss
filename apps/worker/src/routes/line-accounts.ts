@@ -1,3 +1,4 @@
+import { deliveryEnabled } from '../lib/delivery-policy.js';
 import { Hono } from 'hono';
 import { LineClient } from '@line-crm/line-sdk';
 import {
@@ -105,7 +106,7 @@ lineAccounts.get('/api/line-accounts', async (c) => {
     const results = await Promise.all(
       items.map(async (item) => {
         const [profile, friendCount, scenarioCount, msgCount] = await Promise.all([
-          fetchBotProfile(item.channel_access_token),
+          deliveryEnabled(c.env) ? fetchBotProfile(item.channel_access_token) : Promise.resolve({ displayName: undefined, pictureUrl: undefined, basicId: undefined }),
           db.prepare(`SELECT COUNT(*) as count FROM friends WHERE is_following = 1 AND line_account_id = ?`).bind(item.id).first<{ count: number }>(),
           db.prepare(
             `SELECT COUNT(*) as count FROM friend_scenarios fs

@@ -1,3 +1,4 @@
+import { deliveryEnabled, deliverySuppressed } from './lib/delivery-policy.js';
 import { LineClient } from '@line-crm/line-sdk';
 import {
   getLineAccounts,
@@ -66,6 +67,10 @@ export async function scheduled(
   env: Env['Bindings'],
   ctx: ExecutionContext,
 ): Promise<void> {
+  if (!deliveryEnabled(env)) {
+    deliverySuppressed('scheduled');
+    return;
+  }
   // Get all active accounts from DB
   const dbAccounts = await getLineAccounts(env.DB);
 

@@ -1,3 +1,5 @@
+import { readAdAttribution } from './lib/ad-attribution.js';
+import { createNoSendStaticGate, deliveryPolicyMiddleware } from './lib/delivery-policy.js';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import {
@@ -89,6 +91,8 @@ import {
 
 export type Env = {
   Bindings: {
+    /** Only exact enabled permits delivery. Missing/invalid values are no-send. */
+    DELIVERY_MODE?: string;
     DB: D1Database;
     IMAGES: R2Bucket;
     ASSETS: Fetcher;
@@ -158,6 +162,7 @@ export type Env = {
 };
 
 const app = new Hono<Env>();
+app.use('*', deliveryPolicyMiddleware);
 
 // Private Workers Cache pilot: only responses that deliberately declare a
 // public Cache-Control policy may enter the cache. This wrapper runs after all
@@ -196,6 +201,10 @@ app.use('*', rateLimitMiddleware);
 
 // Auth middleware — skips /webhook and /docs automatically
 app.use('*', authMiddleware);
+
+// No-send mode: bundled LIFF UI paths are answered by the static fallback only,
+// before any route handler can run. Delivery-enabled requests pass through.
+app.use('*', createNoSendStaticGate(notFoundHandler));
 
 // Mount route groups — MVP & Round 2
 app.route('/', webhook);
@@ -420,9 +429,8 @@ app.get('/r/:ref', async (c) => {
   // to /r/:ref, but rebuilding liffParams here without these keys silently
   // drops ad attribution for the primary mobile path. Keep this list in sync
   // with the params /auth/line reads.
-  for (const key of ['gclid', 'fbclid', 'twclid', 'ttclid', 'utm_source', 'utm_medium', 'utm_campaign']) {
-    const value = c.req.query(key);
-    if (value) liffParams.set(key, value);
+  for (const [key, value] of Object.entries(readAdAttribution(key => c.req.query(key)))) {
+    liffParams.set(key, value);
   }
   const liffTarget = liffParams.toString() ? `${liffUrl}?${liffParams.toString()}` : liffUrl;
 

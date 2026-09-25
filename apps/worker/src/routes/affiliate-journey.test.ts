@@ -20,7 +20,7 @@ vi.mock('@line-crm/db', () => dbMocks);
 const worker = (await import('../index.js')).default;
 
 const API_KEY = 'test-owner-key';
-const env = {
+const env = { DELIVERY_MODE: 'enabled',
   DB: {} as D1Database,
   LINE_LOGIN_CHANNEL_ID: '2000000000',
   API_KEY,

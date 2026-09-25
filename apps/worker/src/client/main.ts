@@ -1,3 +1,5 @@
+import { attributionFromSearch, linkRequestWithAttribution } from './ad-attribution.js';
+import { createLiffQueryReader } from '../lib/liff-query.js';
 /**
  * L Harness LIFF — The single entry point
  *
@@ -41,6 +43,9 @@ function detectLiffId(): string {
   if (fromParam) return fromParam;
   return import.meta.env?.VITE_LIFF_ID || '';
 }
+const initialAttribution = attributionFromSearch(window.location.search);
+const initialParams = new URLSearchParams(window.location.search);
+const initialRef = createLiffQueryReader(key => initialParams.get(key) ?? undefined)('ref');
 const LIFF_ID = detectLiffId();
 if (!LIFF_ID) {
   throw new Error('LIFF ID not found. Set ?liffId= in LIFF endpoint URL or VITE_LIFF_ID env.');
@@ -50,6 +55,7 @@ const UUID_STORAGE_KEY = 'lh_uuid';
 let BOT_BASIC_ID = '';
 
 function apiCall(path: string, options?: RequestInit): Promise<Response> {
+  if (path === '/api/liff/link') options = linkRequestWithAttribution(options, initialAttribution, window.location.search);
   return fetch(path, {
     ...options,
     headers: {
@@ -77,7 +83,7 @@ function getRedirectUrl(): string | null {
 
 function getRef(): string | null {
   const params = new URLSearchParams(window.location.search);
-  return params.get('ref');
+  return createLiffQueryReader(key => params.get(key) ?? undefined)('ref') || initialRef || null;
 }
 
 function getSavedUuid(): string | null {

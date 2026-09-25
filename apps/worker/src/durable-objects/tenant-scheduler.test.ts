@@ -181,7 +181,7 @@ describe('ensureSchedulerArmed — webhook から叩かれる薄いラッパー'
     const stub = { ensureArmed: vi.fn(async () => {}) };
     const ns = fakeNamespace(stub);
 
-    await ensureSchedulerArmed({ TENANT_SCHEDULER: ns as never });
+    await ensureSchedulerArmed({ DELIVERY_MODE: 'enabled', TENANT_SCHEDULER: ns as never });
 
     expect(ns.idFromNameCalls).toEqual([SCHEDULER_INSTANCE_NAME]);
     expect(stub.ensureArmed).toHaveBeenCalledTimes(1);
@@ -192,7 +192,7 @@ describe('ensureSchedulerArmed — webhook から叩かれる薄いラッパー'
     const ns = fakeNamespace(stub);
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    await expect(ensureSchedulerArmed({ TENANT_SCHEDULER: ns as never })).resolves.toBeUndefined();
+    await expect(ensureSchedulerArmed({ DELIVERY_MODE: 'enabled', TENANT_SCHEDULER: ns as never })).resolves.toBeUndefined();
 
     expect(consoleError).toHaveBeenCalled();
     consoleError.mockRestore();
@@ -221,7 +221,7 @@ describe('TenantScheduler クラス — DO ランタイムへの配線', () => {
     const storage = fakeStorage(null);
     const ctx = fakeCtx(storage);
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const scheduler = new TenantScheduler(ctx as never, {} as never);
+    const scheduler = new TenantScheduler(ctx as never, { DELIVERY_MODE: 'enabled' } as never);
     await ctx.ready;
 
     expect(storage.alarm()).not.toBeNull();
@@ -244,7 +244,7 @@ describe('TenantScheduler クラス — DO ランタイムへの配線', () => {
     await withFixedNow('2026-08-23T10:30:00Z', async () => {
       const storage = fakeStorage(1_700_000_000_000); // コンストラクタの自己修復をスキップさせる
       const ctx = fakeCtx(storage);
-      const env = { DB: {} } as never;
+      const env = { DB: {}, DELIVERY_MODE: 'enabled' } as never;
       const scheduler = new TenantScheduler(ctx as never, env);
       await ctx.ready;
 
@@ -267,7 +267,7 @@ describe('TenantScheduler クラス — DO ランタイムへの配線', () => {
     await withFixedNow('2026-08-23T12:00:00Z', async () => {
       const storage = fakeStorage(1_700_000_000_000);
       const ctx = fakeCtx(storage);
-      const env = { DB: {} } as never;
+      const env = { DB: {}, DELIVERY_MODE: 'enabled' } as never;
       const scheduler = new TenantScheduler(ctx as never, env);
       await ctx.ready;
 
@@ -284,7 +284,7 @@ describe('TenantScheduler クラス — DO ランタイムへの配線', () => {
   test('ensureArmed() は公開 RPC メソッドとして自己修復ロジックに委譲する', async () => {
     const storage = fakeStorage(null);
     const ctx = fakeCtx(storage);
-    const scheduler = new TenantScheduler(ctx as never, {} as never);
+    const scheduler = new TenantScheduler(ctx as never, { DELIVERY_MODE: 'enabled' } as never);
     await ctx.ready; // コンストラクタが既にアーム済み
 
     const armedAtStart = storage.alarm();
