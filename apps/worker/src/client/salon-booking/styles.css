@@ -185,6 +185,8 @@ body.sb-active #app {
 
 /* konkatsucafe fork (L-08 s3): 日付・時間の横カルーセル。指で送り、放すと区切りで止まる */
 .kc-scroll {
+  /* 中のカードの offsetLeft を帯の中の位置にする（選んだカードを全部見える位置へ送る計算に使う） */
+  position: relative;
   display: flex;
   gap: 8px;
   overflow-x: auto;

@@ -246,7 +246,9 @@ export default function IntakeForm({
             />
             <span className="text-[14px] leading-relaxed text-[#111]">
               {agree.label}
-<span className="ml-1.5 inline-block rounded bg-[#ececec] px-1.5 py-px align-middle text-[10px] font-bold text-[#555]">必須</span>
+              <span className="ml-1.5 inline-block rounded bg-[#ececec] px-1.5 py-px align-middle text-[10px] font-bold text-[#555]">
+                必須
+              </span>
             </span>
           </label>
           {err('agreeTerms')}

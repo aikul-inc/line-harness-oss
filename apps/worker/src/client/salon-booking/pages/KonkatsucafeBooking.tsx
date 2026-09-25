@@ -45,6 +45,70 @@ const STEPS: Array<{ key: Step; label: string }> = [
 const CALLBACK_TEXT = 'お店からお電話でご予約内容を確認のうえ、確定のご連絡をいたします。';
 const WEEKDAY = ['日', '月', '火', '水', '木', '金', '土'] as const;
 
+/** 帯の両端に残す余白（px）。カードがこの内側に全部入るように送る（styles.css の .kc-scroll と同じ） */
+const EDGE = 16;
+
+/**
+ * 帯をなめらかに送る。送っている間は「放すと区切りで止まる」を外し、止まったら戻す
+ * （付けたままだと、送り終わりにブラウザが近い区切りへ引き戻し、カードがまた端で切れる）
+ */
+const scrollGeneration = new WeakMap<HTMLElement, number>();
+
+function smoothScrollStrip(box: HTMLElement, target: number, behavior: ScrollBehavior = 'smooth'): void {
+  const left = Math.max(0, Math.min(target, box.scrollWidth - box.clientWidth));
+  // 新しく送り始めたら、前の送りの見張りは止める（続けて押したときに古い行き先へ戻さない）
+  const gen = (scrollGeneration.get(box) ?? 0) + 1;
+  scrollGeneration.set(box, gen);
+  if (behavior !== 'smooth') {
+    box.scrollLeft = left;
+    return;
+  }
+  box.style.scrollSnapType = 'none';
+  box.scrollTo({ left, behavior: 'smooth' });
+  const started = Date.now();
+  let last = -1;
+  let still = 0;
+  const watch = () => {
+    if (scrollGeneration.get(box) !== gen) return;
+    const now = box.scrollLeft;
+    still = Math.abs(now - last) < 0.5 ? still + 1 : 0;
+    last = now;
+    if ((still >= 4 && Math.abs(now - left) < 2) || Date.now() - started > 1500) {
+      if (Math.abs(box.scrollLeft - left) >= 2) box.scrollLeft = left;
+      box.style.scrollSnapType = '';
+      return;
+    }
+    requestAnimationFrame(watch);
+  };
+  requestAnimationFrame(watch);
+}
+
+/**
+ * 帯の中のカードが全部見えるように送る。すでに全部見えていれば動かさない。
+ * 行き先は区切り（各カードの左端 − 余白）にそろえる。帯（.kc-scroll）は position: relative なので、
+ * offsetLeft は帯の中の位置
+ */
+function revealInStrip(box: HTMLElement, el: HTMLElement, behavior: ScrollBehavior = 'smooth'): number | null {
+  const left = el.offsetLeft - EDGE;
+  const right = el.offsetLeft + el.offsetWidth + EDGE - box.clientWidth;
+  let target: number | null = null;
+  if (box.scrollLeft > left + 0.5) target = left;
+  else if (box.scrollLeft < right - 0.5) {
+    // 右で切れているとき: そのカードが右端に入る最初の区切りまで送る
+    target = right;
+    for (const c of Array.from(box.children) as HTMLElement[]) {
+      const snap = c.offsetLeft - EDGE;
+      if (snap >= right - 0.5) {
+        target = snap;
+        break;
+      }
+    }
+  }
+  if (target === null) return null;
+  smoothScrollStrip(box, target, behavior);
+  return target;
+}
+
 /** 今の日本時間（HH:MM）。今日を選んだときに、過ぎた時間を選べないようにする */
 function jstNowHHMM(): string {
   return new Date(Date.now() + 9 * 3600_000).toISOString().slice(11, 16);
@@ -183,42 +247,66 @@ function VisitDateTime({
   const monthIdx = months.indexOf(month);
   const [errors, setErrors] = useState<{ date?: string; time?: string }>({});
   const dayRef = useRef<HTMLDivElement>(null);
+  const timeRef = useRef<HTMLDivElement>(null);
+  // 「‹ ›」で送っている途中は、見出しを行き先の月のまま動かさない（途中の位置で戻らないように）
+  const jumping = useRef<{ target: number; until: number } | null>(null);
   const isPast = (t: string) => value.date === today && t < nowHHMM;
 
-  // 戻ってきたときは、選んだ日が見える位置から始める（最初の 1 回だけ）
+  // 戻ってきたときは、選んだ日・時間が全部見える位置から始める（最初の 1 回だけ）
   useEffect(() => {
     const box = dayRef.current;
     const picked = box?.querySelector<HTMLElement>('[data-selected="true"]');
-    if (box && picked) box.scrollLeft = picked.offsetLeft - 16;
+    if (box && picked) revealInStrip(box, picked, 'auto');
+    const tbox = timeRef.current;
+    const tpicked = tbox?.querySelector<HTMLElement>('[data-selected="true"]');
+    if (tbox && tpicked) revealInStrip(tbox, tpicked, 'auto');
+    onDaysScroll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /** 帯を送ったら、左端の日の月を見出しにする */
+  /**
+   * 帯を送ったら、**見えている範囲の多いほうの月**を見出しにする。
+   * 帯の真ん中にある日の月を取る（日は続いて並ぶので、真ん中の日の月が見えている日の半分以上を占める）。
+   * 選んだ日の月に合わせないのは、何も選んでいないときや、選んだあとに指で別の月へ送ったときに、
+   * 見出しと見えている日が食い違うため
+   */
   function onDaysScroll() {
     const box = dayRef.current;
     if (!box) return;
+    const j = jumping.current;
+    if (j) {
+      if (Math.abs(box.scrollLeft - j.target) > 2 && Date.now() < j.until) return;
+      jumping.current = null;
+    }
     const items = box.querySelectorAll<HTMLElement>('[data-day]');
     if (items.length === 0) return;
-    // 日は同じ幅で並ぶので、位置から番号を割り出す（731 個を毎回なめない）
+    // 日は同じ幅で並ぶので、位置から番号を割り出す（732 個を毎回なめない）
     const first = items[0];
     const step = items.length > 1 ? items[1].offsetLeft - first.offsetLeft : 1;
-    const i = Math.min(items.length - 1, Math.max(0, Math.floor((box.scrollLeft + 20 - first.offsetLeft) / step)));
+    const center = box.scrollLeft + box.clientWidth / 2;
+    const i = Math.min(items.length - 1, Math.max(0, Math.floor((center - first.offsetLeft) / step)));
     const key = items[i]?.dataset.day?.slice(0, 7);
     if (key && key !== month) setMonth(key);
   }
 
-  /** 月の切り替え: その月の最初の日まで帯を送る */
+  /** 月の切り替え: その月の最初の日が左端に全部見える位置まで、なめらかに送る */
   function jumpMonth(key: string) {
     const box = dayRef.current;
-    const target = box?.querySelector<HTMLElement>(`[data-day^="${key}"]`);
-    // すぐに送る（ゆっくり送ると、途中の位置で見出しの月が戻ってしまう）
-    if (box && target) box.scrollLeft = target.offsetLeft - 16;
+    const el = box?.querySelector<HTMLElement>(`[data-day^="${key}"]`);
+    if (box && el) {
+      const target = Math.max(0, Math.min(el.offsetLeft - EDGE, box.scrollWidth - box.clientWidth));
+      jumping.current = { target, until: Date.now() + 1600 };
+      smoothScrollStrip(box, target);
+    }
     setMonth(key);
   }
 
-  function pickDate(date: string) {
+  function pickDate(date: string, el?: HTMLElement | null) {
     const start = date === today && value.start && value.start < nowHHMM ? '' : value.start;
     onChange({ date, start });
     setErrors({ ...errors, date: undefined });
+    // 選んだカードが端で切れていたら、全部見える位置まで送る
+    if (dayRef.current && el) revealInStrip(dayRef.current, el);
   }
 
   function handleNext() {
@@ -308,7 +396,7 @@ function VisitDateTime({
                     checked={selected}
                     disabled={closed}
                     aria-label={`${day.m}月${day.d}日（${WEEKDAY[day.w]}）${closed ? ' 定休日' : holiday ? ` ${HOLIDAY_TUESDAYS[day.value]}` : ''}`}
-                    onChange={() => pickDate(day.value)}
+                    onChange={(e) => pickDate(day.value, e.currentTarget.parentElement)}
                     className="absolute h-px w-px opacity-0"
                   />
                   <span className="text-[11px] font-bold" style={{ color: wColor }}>
@@ -326,13 +414,15 @@ function VisitDateTime({
         </Row>
         <Row last>
           <Label text="来店希望時間" required />
-          <div className="kc-scroll" role="radiogroup" aria-label="来店希望時間" data-testid="sb-times">
+          <div ref={timeRef} className="kc-scroll" role="radiogroup" aria-label="来店希望時間" data-testid="sb-times">
             {VISIT_TIMES.map((t) => {
               const selected = value.start === t;
               const past = isPast(t);
               return (
                 <label
                   key={t}
+                  data-time={t}
+                  data-selected={selected ? 'true' : undefined}
                   className={`relative flex h-11 w-[74px] items-center justify-center rounded-xl border text-[15px] transition-colors ${
                     past
                       ? 'cursor-not-allowed border-[#ededed] bg-[#f5f5f5] text-[#c4c4c4]'
@@ -347,9 +437,11 @@ function VisitDateTime({
                     value={t}
                     checked={selected}
                     disabled={past}
-                    onChange={() => {
+                    onChange={(e) => {
                       onChange({ ...value, start: t });
                       setErrors({ ...errors, time: undefined });
+                      const chip = e.currentTarget.parentElement;
+                      if (timeRef.current && chip) revealInStrip(timeRef.current, chip);
                     }}
                     className="absolute h-px w-px opacity-0"
                   />
