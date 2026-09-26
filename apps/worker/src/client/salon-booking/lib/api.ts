@@ -44,9 +44,25 @@ export interface BookingHistoryItem {
   starts_at: string;
   status: string;
   customer_note?: string | null;
+  /** konkatsucafe fork (L-08): お客様情報つきの予約。メニュー・担当を見せない */
+  konkatsucafe?: number;
   menu_name: string;
   staff_name: string;
   profile_image_url: string | null;
+}
+
+/** konkatsucafe fork (L-08): 画面から送るお客様情報。チェックは真偽、複数選択は配列 */
+export interface IntakeDraft {
+  sei: string;
+  mei: string;
+  gender: string;
+  age: string;
+  tel: string;
+  lineName: string;
+  visitCount: string;
+  agreeTerms: boolean;
+  experience: string[];
+  message: string;
 }
 
 function authHeaders(ctx: SalonBookingContext, extra: Record<string, string> = {}): Record<string, string> {
@@ -90,7 +106,11 @@ async function post<T>(
 
 export function createApi(ctx: SalonBookingContext) {
   return {
-    menus: () => get<{ menus: MenuItem[] }>('/api/liff/booking/menus', ctx),
+    menus: () =>
+      get<{ menus: MenuItem[]; intake_form?: string | null; demo_notice?: boolean }>(
+        '/api/liff/booking/menus',
+        ctx,
+      ),
     staffOf: (menuId: string) =>
       get<{ staff: StaffItem[] }>(`/api/liff/booking/menus/${menuId}/staff`, ctx),
     availability: (
@@ -104,7 +124,14 @@ export function createApi(ctx: SalonBookingContext) {
       return get<AvailabilityResponse>(`/api/liff/booking/availability?${qs}`, ctx);
     },
     createRequest: (
-      body: { menu_id: string; staff_id: string; starts_at: string; customer_note?: string },
+      body: {
+        // konkatsucafe fork (L-08): konkatsucafe の流れではメニュー・担当は受け口が割り当てる
+        menu_id?: string;
+        staff_id?: string;
+        starts_at: string;
+        customer_note?: string;
+        intake?: IntakeDraft;
+      },
       idempotencyKey: string,
     ) =>
       post<{ booking_id: string; status: string }>(

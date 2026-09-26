@@ -58,7 +58,7 @@ const DB = {
   }),
 } as unknown as D1Database;
 
-const env = {
+const env = { DELIVERY_MODE: 'enabled',
   DB,
   LIFF_URL: 'https://liff.line.me/1000000000-DefaultAA',
   WORKER_URL: 'https://worker.example.com',

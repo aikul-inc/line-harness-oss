@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import Header from '@/components/layout/header'
-import { bookingApi, type BookingRequest } from '@/lib/api'
+import { bookingApi, type BookingIntake, type BookingRequest } from '@/lib/api'
 import { getApiBase } from '@/lib/api-base'
 import { useAccount } from '@/contexts/account-context'
 import {
@@ -189,7 +189,8 @@ export default function BookingsPage() {
 
   const groupedItems = useMemo(() => {
     const referenceNow = new Date()
-    const groups: Record<BookingTimeGroup, BookingRequest[]> = {
+    const groups: Record<BookingTimeGroup | 'pending', BookingRequest[]> = {
+      pending: [],
       today: [],
       future: [],
       past: [],
@@ -197,15 +198,19 @@ export default function BookingsPage() {
     for (const item of items) {
       if (statusFilter !== 'all' && item.status !== statusFilter) continue
       if (!matchesTimeFilter(item.starts_at, timeFilter, referenceNow)) continue
-      groups[getBookingTimeGroup(item.starts_at, referenceNow)].push(item)
+      // konkatsucafe fork (L-08): 未確定（店舗が電話で確かめる予約）は日付に関係なく一番上にまとめる
+      if (item.status === 'requested') groups.pending.push(item)
+      else groups[getBookingTimeGroup(item.starts_at, referenceNow)].push(item)
     }
+    groups.pending = sortBookings(groups.pending, sort, 'future')
     groups.today = sortBookings(groups.today, sort, 'today')
     groups.future = sortBookings(groups.future, sort, 'future')
     groups.past = sortBookings(groups.past, sort, 'past')
     return groups
   }, [items, sort, statusFilter, timeFilter])
 
-  const visibleCount = groupedItems.today.length + groupedItems.future.length + groupedItems.past.length
+  const visibleCount =
+    groupedItems.pending.length + groupedItems.today.length + groupedItems.future.length + groupedItems.past.length
 
   function showRequested() {
     setStatusFilter('requested')
@@ -366,6 +371,15 @@ export default function BookingsPage() {
         </EmptyPanel>
       ) : (
         <div className="space-y-5">
+          {groupedItems.pending.length > 0 && (
+            <BookingSection
+              title="未確定の予約"
+              helper="お電話で確認して、承認か拒否を選んでください（拒否すると受付の取り消しがトークに届きます）"
+              tone="amber"
+              items={groupedItems.pending}
+              onAction={handleDecide}
+            />
+          )}
           {groupedItems.today.length > 0 && (
             <BookingSection
               title="今日の予約"
@@ -481,7 +495,7 @@ function BookingSection({
 }: {
   title: string
   helper: string
-  tone: 'blue' | 'green' | 'gray'
+  tone: 'amber' | 'blue' | 'green' | 'gray'
   items: BookingRequest[]
   onAction: (
     id: string,
@@ -490,6 +504,7 @@ function BookingSection({
   collapsible?: boolean
 }) {
   const dotColor = {
+    amber: 'bg-amber-500',
     blue: 'bg-blue-500',
     green: 'bg-emerald-500',
     gray: 'bg-gray-400',
@@ -571,6 +586,25 @@ function BookingCard({
               <StatusAndNew status={booking.status} recentlyReceived={recentlyReceived} />
             </span>
           </div>
+          {booking.intake ? (
+            // konkatsucafe fork (L-08): メニュー・担当は自動の割り当てなので出さない。電話をかける番号を出す
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-700">
+              <span>
+                電話{' '}
+                {booking.intake.values.tel ? (
+                  <a
+                    href={`tel:${booking.intake.values.tel}`}
+                    className="font-semibold tabular-nums text-gray-900 hover:text-blue-600 hover:underline"
+                    data-testid="booking-tel"
+                  >
+                    {booking.intake.values.tel}
+                  </a>
+                ) : (
+                  '—'
+                )}
+              </span>
+            </div>
+          ) : (
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-600">
             <span>{booking.menu_name}</span>
             <span className="text-gray-300">•</span>
@@ -582,9 +616,11 @@ function BookingCard({
               </>
             )}
           </div>
+          )}
           <div className="mt-1 text-xs text-gray-400">
             {receivedFormatter.format(new Date(booking.requested_at))} 受付
           </div>
+          {booking.intake && <IntakeSummary intake={booking.intake} />}
           {booking.customer_note && (
             <details className="group/note mt-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-gray-700">
               <summary className="cursor-pointer list-none font-medium text-amber-800">
@@ -607,6 +643,33 @@ function BookingCard({
         </div>
       </div>
     </article>
+  )
+}
+
+/** konkatsucafe fork (L-08): 予約画面で聞いたお客様情報。1 行の要約と、開くと 12 項目 */
+function IntakeSummary({ intake }: { intake: BookingIntake }) {
+  const v = intake.values
+  const summary = [`${v.sei ?? ''} ${v.mei ?? ''}`.trim(), v.gender, v.age, v.visitCount]
+    .filter((x) => x && x.length > 0)
+    .join('・')
+  return (
+    <details className="group/intake mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-gray-700" data-testid="booking-intake">
+      <summary className="cursor-pointer list-none">
+        <span className="font-medium text-gray-900">{summary}</span>
+        <span className="ml-2 font-medium text-emerald-800">
+          <span className="group-open/intake:hidden">お客様情報を見る</span>
+          <span className="hidden group-open/intake:inline">お客様情報を閉じる</span>
+        </span>
+      </summary>
+      <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 border-t border-emerald-200 pt-2">
+        {intake.items.map((item) => (
+          <div key={item.name} className="contents">
+            <dt className="text-xs text-gray-500">{item.label}</dt>
+            <dd className="whitespace-pre-wrap break-words text-sm text-gray-800">{item.value || '—'}</dd>
+          </div>
+        ))}
+      </dl>
+    </details>
   )
 }
 

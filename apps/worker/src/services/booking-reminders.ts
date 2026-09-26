@@ -2,7 +2,12 @@
 // Joined with bookings/menus/staff/line_accounts/friends for everything
 // the notification text renderer needs in one query.
 
-import type { BookingNotificationSender, NotificationKind } from './booking-notifier.js';
+import {
+  notificationCardOf,
+  notificationStyleOf,
+  type BookingNotificationSender,
+  type NotificationKind,
+} from './booking-notifier.js';
 import { REMINDER_MAX_RETRY } from './booking-types.js';
 
 interface DueRow {
@@ -15,12 +20,16 @@ interface DueRow {
   staff_name: string;
   channel_access_token: string;
   line_user_id: string;
+  intake_json: string | null;
+  liff_id: string | null;
 }
 
 export interface ProcessRemindersParams {
   now: Date;
   sender: BookingNotificationSender;
   reminderHoursBefore: number;
+  /** konkatsucafe fork (booking-notice-flex s2): カードの写真・アイコンの置き場に使う */
+  workerUrl?: string;
 }
 
 const JST_OFFSET_MS = 9 * 3600_000;
@@ -39,7 +48,7 @@ export async function processDueReminders(
   const due = await db
     .prepare(
       `SELECT r.id, r.booking_id, r.kind, r.retry_count,
-              b.starts_at,
+              b.starts_at, b.intake_json, la.liff_id,
               m.name AS menu_name,
               s.display_name AS staff_name,
               la.channel_access_token,
@@ -73,6 +82,10 @@ export async function processDueReminders(
           staffName: row.staff_name,
           startsAtJst: startsAtJst(row.starts_at),
           hoursBefore: params.reminderHoursBefore,
+          // konkatsucafe fork (L-08): お客様情報つきの予約はメニュー・担当を見せない
+          style: notificationStyleOf(row.intake_json),
+          // konkatsucafe fork (L-11): カードに載せる値（電話番号は載せない）
+          card: notificationCardOf(row.intake_json, row.liff_id, params.workerUrl),
         },
       });
       await db

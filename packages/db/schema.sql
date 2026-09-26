@@ -1064,6 +1064,7 @@ CREATE TABLE IF NOT EXISTS bookings (
   external_calendar_id    TEXT,                 -- Phase 3 余地
   created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
   updated_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')),
+  intake_json             TEXT CHECK (intake_json IS NULL OR json_valid(intake_json)), -- 073: お客様情報
   FOREIGN KEY (line_account_id) REFERENCES line_accounts(id),
   FOREIGN KEY (friend_id) REFERENCES friends(id),
   FOREIGN KEY (staff_id) REFERENCES staff(id),

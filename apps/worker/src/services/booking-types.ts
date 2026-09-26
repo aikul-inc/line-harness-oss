@@ -98,12 +98,15 @@ export interface AvailabilityByStaff {
 }
 
 export interface AccountSettings {
+  /** 0 以下なら「開始 N 時間前」のお知らせを作らない（前日のお知らせだけ）。 */
   reminder_hours_before: number;
   min_lead_time_minutes: number;
 }
 
 export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
-  reminder_hours_before: 2,
+  // konkatsucafe fork: プッシュは予約 1 件につき 3 通まで（受付・確定・前日）。
+  // 上流の既定 2（開始 2 時間前のお知らせ）を残すと 4 通目になるため止める。
+  reminder_hours_before: 0,
   min_lead_time_minutes: 60,
 };
 

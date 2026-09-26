@@ -4,6 +4,8 @@
 //
 // Reminders already in the past are skipped so that confirming a
 // same-day booking does not immediately fire "明日のご予約" messages.
+// reminderHoursBefore <= 0 disables the hours_before reminder entirely
+// (konkatsucafe fork default: day_before only, 3 pushes per booking).
 
 import { DEFAULT_ACCOUNT_SETTINGS } from './booking-types.js';
 
@@ -27,7 +29,7 @@ export async function insertConfirmationReminders(
         .bind(crypto.randomUUID(), args.bookingId, 'day_before', dayBefore.toISOString()),
     );
   }
-  if (hoursBefore > args.now) {
+  if (hours > 0 && hoursBefore > args.now) {
     inserts.push(
       db
         .prepare(`INSERT INTO booking_reminders (id, booking_id, kind, scheduled_at) VALUES (?,?,?,?)`)

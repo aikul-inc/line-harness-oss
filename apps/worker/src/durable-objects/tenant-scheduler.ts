@@ -1,3 +1,4 @@
+import { deliveryEnabled, deliverySuppressed } from '../lib/delivery-policy.js';
 /**
  * テナント Worker の定期ジョブ (配信・リマインド・insight 取得など) を
  * 自走させる Durable Object。
@@ -144,13 +145,14 @@ export class TenantScheduler extends DurableObject<Env['Bindings']> {
     // 「失敗時は DO をリセットする」という挙動はコールバック内の reject で
     // 別途トリガーされる — ここでの catch はそれを妨げない)。
     ctx.blockConcurrencyWhile(async () => {
-      await ensureAlarmArmed(ctx.storage);
+      if (deliveryEnabled(env)) await ensureAlarmArmed(ctx.storage);
     }).catch((err) => {
       console.error('[TenantScheduler] initial arm-on-construct failed:', err);
     });
   }
 
   async alarm(): Promise<void> {
+    if (!deliveryEnabled(this.env)) { deliverySuppressed('alarm'); return; }
     await runSchedulerTick(this.ctx.storage, (event) =>
       // scheduled() は ScheduledEvent (Event のサブクラス) を受け取る型だが、
       // 実際に読むのは .cron と .scheduledTime の2フィールドだけなので、
@@ -165,6 +167,7 @@ export class TenantScheduler extends DurableObject<Env['Bindings']> {
 
   /** webhook など受信経路から叩かれる自己修復フック。毎リクエストで呼んでよい。 */
   async ensureArmed(): Promise<void> {
+    if (!deliveryEnabled(this.env)) { deliverySuppressed('arm'); return; }
     await ensureAlarmArmed(this.ctx.storage);
   }
 }
@@ -175,9 +178,11 @@ export class TenantScheduler extends DurableObject<Env['Bindings']> {
  * webhook 応答を止めないよう、内部で完結して例外を投げない。
  */
 export async function ensureSchedulerArmed(env: {
+  DELIVERY_MODE?: string;
   TENANT_SCHEDULER?: DurableObjectNamespace<TenantScheduler>;
 }): Promise<void> {
   try {
+    if (!deliveryEnabled(env)) return;
     const ns = env.TENANT_SCHEDULER;
     if (!ns) return;
     const stub = ns.get(ns.idFromName(SCHEDULER_INSTANCE_NAME));

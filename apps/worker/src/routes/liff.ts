@@ -1,3 +1,5 @@
+import { cleanAdAttribution, readLiffAdAttribution, type AdAttribution } from '../lib/ad-attribution.js';
+import { deliveryEnabled, deliverySuppressed } from '../lib/delivery-policy.js';
 import { Hono, type Context } from 'hono';
 import { createLiffQueryReader } from '../lib/liff-query.js';
 import {
@@ -31,6 +33,7 @@ import { attachTagAndFireSideEffects } from '../services/friend-tag-attach.js';
 import { pushImmediateFirstStep } from '../services/immediate-first-step.js';
 import { notifyAffiliateFriendAdd } from '../services/affiliate-notifier.js';
 import { verifyCallerLineUserId } from '../services/liff-auth.js';
+import { registerExistingFollowerForBooking } from '../services/booking-friend.js';
 import { awardActivityMileage } from '../services/activity-mileage.js';
 import { safeRedirectTarget } from '../lib/safe-redirect.js';
 import { isReservedRef } from '../lib/reserved-refs.js';
@@ -67,6 +70,7 @@ async function linkIgIgsid(
   igParam: string,
 ): Promise<boolean> {
   if (!igParam) return true;
+  if (!deliveryEnabled(c.env)) { deliverySuppressed('cross-platform'); return false; }
 
   // Only notify IG Harness if this friend is actually linked to this IGSID
   // locally. Writing LINE→IG first then gating the IG→LINE notify prevents
@@ -196,6 +200,20 @@ async function saveIgAccountMeta(
 // LINE account context when `friend.line_account_id` may not yet be wired
 // up by the follow webhook. Without it the helper would fall back to the
 // default env token and push to the wrong bot for non-default accounts.
+function trackingAdFields(ad: AdAttribution) {
+  return { gclid: ad.gclid ?? null, fbclid: ad.fbclid ?? null, twclid: ad.twclid ?? null, ttclid: ad.ttclid ?? null,
+    utmSource: ad.utm_source ?? null, utmMedium: ad.utm_medium ?? null, utmCampaign: ad.utm_campaign ?? null };
+}
+
+async function saveFriendAdAttribution(db: D1Database, friendId: string, ad: AdAttribution): Promise<void> {
+  if (!Object.keys(ad).length) return;
+  const row = await db.prepare('SELECT metadata FROM friends WHERE id = ?').bind(friendId).first<{ metadata: string }>();
+  let existing: Record<string, unknown> = {};
+  try { const value: unknown = JSON.parse(row?.metadata || '{}'); if (value && typeof value === 'object' && !Array.isArray(value)) existing = value as Record<string, unknown>; } catch { /* Legacy malformed metadata cannot grant identity or erase new attribution. */ }
+  await db.prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
+    .bind(JSON.stringify({ ...existing, ...ad }), jstNow(), friendId).run();
+}
+
 async function applyRefAttribution(
   c: Context<Env>,
   ref: string,
@@ -204,6 +222,7 @@ async function applyRefAttribution(
   options?: { accountChannelId?: string | null; isNewFriend?: boolean },
 ): Promise<void> {
   if (!ref || ref.startsWith('xh:')) return;
+  if (!deliveryEnabled(c.env)) { deliverySuppressed('ref-actions'); return; }
   // Reserved product refs (e.g. 'dashboard') are provenance markers, never
   // campaigns — skip route/tracked-link/affiliate side effects even when a
   // tenant has a pre-existing row with that ref_code. friends.ref_code and
@@ -315,16 +334,19 @@ async function applyRefAttribution(
  *   ?utm_source=xxx, utm_medium, utm_campaign, utm_content, utm_term — UTM params
  */
 liffRoutes.get('/auth/line', async (c) => {
+  const adInput = readLiffAdAttribution(key => c.req.query(key));
   const ref = c.req.query('ref') || '';
   const redirect = c.req.query('redirect') || '';
   const formId = c.req.query('form') || '';
-  const gclid = c.req.query('gclid') || '';
-  const fbclid = c.req.query('fbclid') || '';
-  const twclid = c.req.query('twclid') || '';
-  const ttclid = c.req.query('ttclid') || '';
-  const utmSource = c.req.query('utm_source') || '';
-  const utmMedium = c.req.query('utm_medium') || '';
-  const utmCampaign = c.req.query('utm_campaign') || '';
+  const gclid = adInput.gclid || '';
+  const fbclid = adInput.fbclid || '';
+  const twclid = adInput.twclid || '';
+  const ttclid = adInput.ttclid || '';
+  const utmSource = adInput.utm_source || '';
+  const utmMedium = adInput.utm_medium || '';
+  const utmCampaign = adInput.utm_campaign || '';
+  const utmContent = adInput.utm_content || '';
+  const utmTerm = adInput.utm_term || '';
   let accountParam = c.req.query('account') || '';
   const uidParam = c.req.query('uid') || ''; // existing user UUID for cross-account linking
   const igParam = c.req.query('ig') || ''; // IG Harness IGSID for cross-platform linking
@@ -435,6 +457,10 @@ liffRoutes.get('/auth/line', async (c) => {
   if (twclid) liffParams.set('twclid', twclid);
   if (ttclid) liffParams.set('ttclid', ttclid);
   if (utmSource) liffParams.set('utm_source', utmSource);
+  if (utmMedium) liffParams.set('utm_medium', utmMedium);
+  if (utmCampaign) liffParams.set('utm_campaign', utmCampaign);
+  if (utmContent) liffParams.set('utm_content', utmContent);
+  if (utmTerm) liffParams.set('utm_term', utmTerm);
   const liffTarget = liffParams.toString()
     ? `${liffUrl}?${liffParams.toString()}`
     : liffUrl;
@@ -447,7 +473,7 @@ liffRoutes.get('/auth/line', async (c) => {
   // can verify against the correct gate via the correct X Harness instance.
   // Without these, the form falls back to the gateId baked into the form's
   // onSubmitWebhookUrl (which is stale when a form is reused across campaigns).
-  const state = JSON.stringify({ ref, redirect, form: formId, gate: gateParam, xh: xhParam2, gclid, fbclid, twclid, ttclid, utmSource, utmMedium, utmCampaign, account: accountParam || poolAccount, uid: uidParam, ig: igParam, iga: igaParam, igan: iganParam });
+  const state = JSON.stringify({ ref, redirect, form: formId, gate: gateParam, xh: xhParam2, gclid, fbclid, twclid, ttclid, utmSource, utmMedium, utmCampaign, utmContent, utmTerm, account: accountParam || poolAccount, uid: uidParam, ig: igParam, iga: igaParam, igan: iganParam });
   const encodedState = encodeState(state);
   const loginUrl = new URL('https://access.line.me/oauth2/v2.1/authorize');
   loginUrl.searchParams.set('response_type', 'code');
@@ -482,6 +508,8 @@ liffRoutes.get('/auth/line', async (c) => {
   if (utmSource) qrParams.set('utm_source', utmSource);
   if (utmMedium) qrParams.set('utm_medium', utmMedium);
   if (utmCampaign) qrParams.set('utm_campaign', utmCampaign);
+  if (utmContent) qrParams.set('utm_content', utmContent);
+  if (utmTerm) qrParams.set('utm_term', utmTerm);
   const qrUrl = qrParams.toString() ? `${liffUrl}?${qrParams.toString()}` : liffUrl;
 
   // Mobile: route through /r/:ref so users get the OS-aware landing page
@@ -570,19 +598,22 @@ liffRoutes.get('/auth/line', async (c) => {
  * Same query params as /auth/line. No HTML rendering, no smart logic.
  */
 liffRoutes.get('/auth/oauth', async (c) => {
+  const adInput = readLiffAdAttribution(key => c.req.query(key));
   const q = createLiffQueryReader((key) => c.req.query(key));
   const ref = q('ref');
   const redirect = q('redirect');
   const formId = q('form');
   const gateParam = q('gate');
   const xhParam = q('xh');
-  const gclid = q('gclid');
-  const fbclid = q('fbclid');
-  const twclid = q('twclid');
-  const ttclid = q('ttclid');
-  const utmSource = q('utm_source');
-  const utmMedium = q('utm_medium');
-  const utmCampaign = q('utm_campaign');
+  const gclid = adInput.gclid || '';
+  const fbclid = adInput.fbclid || '';
+  const twclid = adInput.twclid || '';
+  const ttclid = adInput.ttclid || '';
+  const utmSource = adInput.utm_source || '';
+  const utmMedium = adInput.utm_medium || '';
+  const utmCampaign = adInput.utm_campaign || '';
+  const utmContent = adInput.utm_content || '';
+  const utmTerm = adInput.utm_term || '';
   const accountParam = q('account');
   const uidParam = q('uid');
   const igParam = q('ig');
@@ -628,7 +659,7 @@ liffRoutes.get('/auth/oauth', async (c) => {
   const state = JSON.stringify({
     ref, redirect, form: formId, gate: gateParam, xh: xhParam,
     gclid, fbclid, twclid, ttclid,
-    utmSource, utmMedium, utmCampaign,
+    utmSource, utmMedium, utmCampaign, utmContent, utmTerm,
     account: accountParam || poolAccount, uid: uidParam, ig: igParam,
     iga: igaParam, igan: iganParam,
   });
@@ -667,6 +698,8 @@ liffRoutes.get('/auth/callback', async (c) => {
   let utmSource = '';
   let utmMedium = '';
   let utmCampaign = '';
+  let utmContent = '';
+  let utmTerm = '';
   let accountParam = '';
   let uidParam = '';
   let igParam = '';
@@ -686,6 +719,8 @@ liffRoutes.get('/auth/callback', async (c) => {
     utmSource = parsed.utmSource || '';
     utmMedium = parsed.utmMedium || '';
     utmCampaign = parsed.utmCampaign || '';
+    utmContent = parsed.utmContent || '';
+    utmTerm = parsed.utmTerm || '';
     accountParam = parsed.account || '';
     uidParam = parsed.uid || '';
     igParam = parsed.ig || '';
@@ -838,6 +873,8 @@ liffRoutes.get('/auth/callback', async (c) => {
       await linkFriendToUser(db, friend.id, userId);
     }
 
+    const ad = cleanAdAttribution({ gclid, fbclid, twclid, ttclid, utm_source: utmSource, utm_medium: utmMedium, utm_campaign: utmCampaign, utm_content: utmContent, utm_term: utmTerm });
+
     // Attribution tracking
     // xh: refs are X Harness one-time tokens (the token IS the secret) — never persist as ref_code
     if (ref && !ref.startsWith('xh:')) {
@@ -856,13 +893,7 @@ liffRoutes.get('/auth/callback', async (c) => {
         friendId: friend.id,
         entryRouteId: route?.id ?? null,
         sourceUrl: null,
-        fbclid: fbclid || null,
-        gclid: gclid || null,
-        twclid: twclid || null,
-        ttclid: ttclid || null,
-        utmSource: utmSource || null,
-        utmMedium: utmMedium || null,
-        utmCampaign: utmCampaign || null,
+        ...trackingAdFields(ad),
         userAgent: c.req.header('User-Agent') || null,
         ipAddress: c.req.header('CF-Connecting-IP') || null,
       });
@@ -873,30 +904,11 @@ liffRoutes.get('/auth/callback', async (c) => {
       });
     }
 
-    // Save ad click IDs + UTM to friend metadata (for future ad API postback)
-    const adMeta: Record<string, string> = {};
-    if (gclid) adMeta.gclid = gclid;
-    if (fbclid) adMeta.fbclid = fbclid;
-    if (twclid) adMeta.twclid = twclid;
-    if (ttclid) adMeta.ttclid = ttclid;
-    if (utmSource) adMeta.utm_source = utmSource;
-    if (utmMedium) adMeta.utm_medium = utmMedium;
-    if (utmCampaign) adMeta.utm_campaign = utmCampaign;
-
-    if (Object.keys(adMeta).length > 0) {
-      const existingMeta = await db
-        .prepare('SELECT metadata FROM friends WHERE id = ?')
-        .bind(friend.id)
-        .first<{ metadata: string }>();
-      const merged = { ...JSON.parse(existingMeta?.metadata || '{}'), ...adMeta };
-      await db
-        .prepare('UPDATE friends SET metadata = ?, updated_at = ? WHERE id = ?')
-        .bind(JSON.stringify(merged), jstNow(), friend.id)
-        .run();
-    }
+    // Existing semantics: update only the valid nonempty fields supplied on this visit.
+    await saveFriendAdAttribution(db, friend.id, ad);
 
     // X Harness token resolution: ref starting with "xh:" links X account to LINE friend
-    if (ref && ref.startsWith('xh:')) {
+    if (deliveryEnabled(c.env) && ref && ref.startsWith('xh:')) {
       try {
         const xhToken = ref.slice(3);
         const xhResult = await resolveXHarnessToken(xhToken, c.env);
@@ -936,7 +948,7 @@ liffRoutes.get('/auth/callback', async (c) => {
         ? (await getLineAccountByChannelId(db, accountParam))?.id ?? null
         : null;
 
-      const scenarios = runAccountScenariosLiff ? await getScenarios(db) : [];
+      const scenarios = deliveryEnabled(c.env) && runAccountScenariosLiff ? await getScenarios(db) : [];
       for (const scenario of scenarios) {
         const scenarioAccountMatch = !scenario.line_account_id || !matchedAccountId || scenario.line_account_id === matchedAccountId;
         if (scenario.trigger_type !== 'friend_add' || !scenario.is_active || !scenarioAccountMatch) {
@@ -993,8 +1005,13 @@ liffRoutes.get('/auth/callback', async (c) => {
       return c.redirect(safeRedirect);
     }
 
+    if (!deliveryEnabled(c.env)) {
+      deliverySuppressed('oauth-notifications');
+      return c.html('<p>計測情報を記録しました。無送信モードのため通知は行っていません。</p>');
+    }
+
     // Send form link as LINE message if form param was passed
-    if (formId && friend?.line_user_id) {
+    if (deliveryEnabled(c.env) && formId && friend?.line_user_id) {
       try {
         // Build form LIFF URL using the friend's account liff_id (multi-account aware)
         // Append gate/xh so the form can verify against the correct campaign gate
@@ -1121,18 +1138,22 @@ liffRoutes.get('/api/liff/config', async (c) => {
     const accountName = account?.name || 'Default';
     const accountId = account?.id || 'default';
 
-    // Fetch bot basic ID from LINE API
+    // Fetch bot basic ID from LINE API. In no-send mode this public route stays
+    // DB-only (as /api/line-accounts does); the client treats an empty ID as
+    // "no friend-add redirect".
     let botBasicId = '';
-    try {
-      const botRes = await fetch('https://api.line.me/v2/bot/info', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (botRes.ok) {
-        const bot = await botRes.json() as { basicId?: string };
-        botBasicId = bot.basicId || '';
+    if (deliveryEnabled(c.env)) {
+      try {
+        const botRes = await fetch('https://api.line.me/v2/bot/info', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (botRes.ok) {
+          const bot = await botRes.json() as { basicId?: string };
+          botBasicId = bot.basicId || '';
+        }
+      } catch {
+        // non-blocking
       }
-    } catch {
-      // non-blocking
     }
 
     return c.json({
@@ -1180,6 +1201,7 @@ liffRoutes.post('/api/liff/link', async (c) => {
   try {
     const body = await c.req.json<{
       idToken: string;
+      attribution?: unknown;
       displayName?: string | null;
       ref?: string;
       existingUuid?: string;
@@ -1231,12 +1253,33 @@ liffRoutes.post('/api/liff/link', async (c) => {
     const matchedAccount = matchedLoginChannelId
       ? dbAccounts.find((a) => a.login_channel_id === matchedLoginChannelId) ?? null
       : null;
-    const friend = await getFriendByLineUserIdForAccount(
+    let friend = await getFriendByLineUserIdForAccount(
       db, lineUserId, matchedAccount?.id ?? null,
     );
+    // konkatsucafe fork (L-06): L Harness より前からの友だちは follow が届いておらず行がない。
+    // 計測リンクから LIFF を開いたときに行がないと、クリックも広告値もその人に残らない。
+    // 予約の送信時（L-07）と同じ 2 条件（IDトークン検証済み・そのアカウントのプロフィール照会 200）
+    // が揃ったときだけ登録する。登録アカウントのない旧構成や、別アカウントの行がある人は従来どおり断る。
+    if (!friend && matchedAccount) {
+      const registered = await registerExistingFollowerForBooking(db, {
+        lineUserId,
+        accountId: matchedAccount.id,
+      });
+      if (registered.registered) {
+        friend = await getFriendByLineUserIdForAccount(db, lineUserId, matchedAccount.id);
+      }
+    }
     if (!friend) {
       return c.json({ success: false, error: 'Friend not found' }, 404);
     }
+
+    // The legacy lookup can fall back to another account's row. Never write
+    // attribution or identity links across the account verified by LINE.
+    if ((dbAccounts.length > 0 && (!matchedAccount || friend.line_account_id !== matchedAccount.id)) ||
+        (friend.line_account_id && friend.line_account_id !== matchedAccount?.id)) {
+      return c.json({ success: false, error: 'Friend account mismatch' }, 403);
+    }
+    const ad = cleanAdAttribution(body.attribution);
 
     let linkedUserId = (friend as unknown as Record<string, unknown>).user_id as string | null;
     if (body.crossAccountToken) {
@@ -1257,6 +1300,8 @@ liffRoutes.post('/api/liff/link', async (c) => {
       await linkFriendToUser(db, friend.id, crossAccount.userId);
       linkedUserId = crossAccount.userId;
     }
+
+    await saveFriendAdAttribution(db, friend.id, ad);
 
     // IG cross-link: runs regardless of already-linked vs new-link branch so
     // existing friends still get ig_igsid wired when they hit this endpoint
@@ -1283,6 +1328,7 @@ liffRoutes.post('/api/liff/link', async (c) => {
             friendId: friend.id,
             entryRouteId: route?.id ?? null,
             sourceUrl: null,
+            ...trackingAdFields(ad),
           });
         } catch { /* silent */ }
       }
@@ -1292,7 +1338,7 @@ liffRoutes.post('/api/liff/link', async (c) => {
         });
       }
       // X Harness token resolution for already-linked friends
-      if (body.ref && body.ref.startsWith('xh:')) {
+      if (deliveryEnabled(c.env) && body.ref && body.ref.startsWith('xh:')) {
         try {
           const xhToken = body.ref.slice(3);
           const xhResult = await resolveXHarnessToken(xhToken, c.env);
@@ -1352,6 +1398,7 @@ liffRoutes.post('/api/liff/link', async (c) => {
           friendId: friend.id,
           entryRouteId: route?.id ?? null,
           sourceUrl: null,
+          ...trackingAdFields(ad),
         });
       } catch { /* silent */ }
 
@@ -1362,7 +1409,7 @@ liffRoutes.post('/api/liff/link', async (c) => {
     }
 
     // X Harness token resolution: ref starting with "xh:" links X account to LINE friend
-    if (body.ref && body.ref.startsWith('xh:')) {
+    if (deliveryEnabled(c.env) && body.ref && body.ref.startsWith('xh:')) {
       try {
         const xhToken = body.ref.slice(3);
         const xhResult = await resolveXHarnessToken(xhToken, c.env);

@@ -1,3 +1,4 @@
+import { deliveryEnabled, deliverySuppressed } from '../lib/delivery-policy.js';
 import { Hono } from 'hono';
 import { verifySignature, LineClient } from '@line-crm/line-sdk';
 import type { WebhookRequestBody, WebhookEvent, TextEventMessage } from '@line-crm/line-sdk';
@@ -157,6 +158,36 @@ webhook.post('/webhook', async (c) => {
   } catch {
     console.error('Failed to parse webhook body');
     return c.json({ status: 'ok' }, 200);
+  }
+
+  if (!deliveryEnabled(c.env)) {
+    deliverySuppressed('webhook');
+    // Only signed relationship facts survive. No profile fetch, reply, event bus,
+    // tag/mileage work, scenario enrollment or scheduler arming is reachable.
+    if (!matchedAccountId) return c.json({ status: 'suppressed' }, 200);
+    for (const event of Array.isArray(body?.events) ? body.events : []) {
+      try {
+        if (event?.source?.type !== 'user' || !event.source.userId) continue;
+        if (event.type !== 'follow' && event.type !== 'unfollow') continue;
+        const userId = event.source.userId;
+        const existing = await getFriendByLineUserId(db, userId);
+        // Legacy schema identifies friends globally: do not move another account's row.
+        if (existing?.line_account_id && existing.line_account_id !== matchedAccountId) continue;
+        if (event.type === 'unfollow') {
+          if (existing) await updateFriendFollowStatus(db, userId, false);
+        } else {
+          const friend = await upsertFriend(db, {
+            lineUserId: userId, displayName: existing?.display_name ?? null,
+            pictureUrl: existing?.picture_url ?? null, statusMessage: existing?.status_message ?? null,
+          });
+          await db.prepare('UPDATE friends SET line_account_id = ? WHERE id = ?')
+            .bind(matchedAccountId, friend.id).run();
+        }
+      } catch {
+        console.error('[no-send] relationship event recording failed');
+      }
+    }
+    return c.json({ status: 'suppressed' }, 200);
   }
 
   const lineClient = new LineClient(channelAccessToken);

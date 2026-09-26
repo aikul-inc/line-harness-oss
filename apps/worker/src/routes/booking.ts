@@ -25,9 +25,25 @@ import {
   findIdempotencyResponse,
   saveIdempotencyResponse,
 } from '../services/booking-idempotency.js';
-import { sendBookingNotification } from '../services/booking-notifier.js';
+import {
+  notificationCardOf,
+  notificationStyleOf,
+  sendBookingNotification,
+} from '../services/booking-notifier.js';
 import { insertConfirmationReminders } from '../services/booking-confirm.js';
 import { attachTagAndFireSideEffects } from '../services/friend-tag-attach.js';
+import { registerExistingFollowerForBooking } from '../services/booking-friend.js';
+import { fireCalendarBooked } from '../services/booking-events.js';
+import {
+  INTAKE_VERSION,
+  KONKATSUCAFE_INTAKE,
+  KONKATSUCAFE_INTAKE_DEMO,
+  checkVisitSlot,
+  intakeFriendMetadata,
+  intakeItems,
+  parseStoredIntake,
+  validateIntake,
+} from '../services/booking-intake-fields.js';
 import {
   DEFAULT_ACCOUNT_SETTINGS,
   IDEMPOTENCY_TTL_MINUTES,
@@ -113,6 +129,18 @@ export function adminCalendarReturnUrl(
 // Helpers
 
 const JST_OFFSET_MS = 9 * 3600_000;
+
+/**
+ * konkatsucafe fork (L-08): konkatsucafe の予約の流れにするか。未設定は 'off'（上流のまま）、
+ * 'konkatsucafe'／'konkatsucafe-demo'（控えにデモの注記）、知らない値は 'invalid'（LIFF からの予約を断る）。
+ */
+function intakeMode(env: Env['Bindings']): 'off' | 'konkatsucafe' | 'konkatsucafe-demo' | 'invalid' {
+  const v = (env.BOOKING_INTAKE ?? '').trim();
+  if (v === '') return 'off';
+  if (v === KONKATSUCAFE_INTAKE) return 'konkatsucafe';
+  if (v === KONKATSUCAFE_INTAKE_DEMO) return 'konkatsucafe-demo';
+  return 'invalid';
+}
 
 function startsAtJst(utcIso: string): string {
   const jst = new Date(new Date(utcIso).getTime() + JST_OFFSET_MS).toISOString();
@@ -253,10 +281,11 @@ async function notifyForBooking(
   db: D1Database,
   bookingId: string,
   kind: 'requested' | 'approved' | 'rejected',
+  workerUrl?: string,
 ): Promise<void> {
   const row = await db
     .prepare(
-      `SELECT b.starts_at,
+      `SELECT b.starts_at, b.intake_json, la.liff_id,
               m.name AS menu_name,
               s.display_name AS staff_name,
               la.channel_access_token,
@@ -275,6 +304,8 @@ async function notifyForBooking(
       staff_name: string;
       channel_access_token: string;
       line_user_id: string;
+      intake_json: string | null;
+      liff_id: string | null;
     }>();
   if (!row) return;
   await sendBookingNotification({
@@ -286,8 +317,192 @@ async function notifyForBooking(
       staffName: row.staff_name,
       startsAtJst: startsAtJst(row.starts_at),
       hoursBefore: 0,
+      // konkatsucafe fork (L-08): お客様情報つきの予約はメニュー・担当を見せない
+      style: notificationStyleOf(row.intake_json),
+      // konkatsucafe fork (L-11): カードに載せる値（電話番号は載せない）
+      card: notificationCardOf(row.intake_json, row.liff_id, workerUrl),
     },
   });
+}
+
+// ================================================================
+// konkatsucafe fork (L-08): 日時 → お客様情報 → 確認 の予約受付
+//
+// - メニュー・担当は選ばせない。アカウントに 1 件ずつあるものを受け口が割り当てる
+//   （0 件や 2 件以上なら設定の誤りとして断る。どれを選ぶかを推測しない）
+// - 枠の上限は設けない（同じ日時に何件でも入る）。日時は /yoyaku/ と同じ選択肢
+//   （来店希望日は今日〜2 年後、時間は 10:30〜18:00 の 30 分刻み）。s4: ふつうの火曜は定休として断る
+//   （祝日の火曜は受ける。祝日は内閣府の一覧から: services/konkatsucafe-holidays.ts）
+// - 受付は requested。店舗が電話で確かめてから管理画面で承認・取り消しを決める
+//   （自動の期限切れはしない: services/booking-expirer.ts）
+// ================================================================
+
+async function konkatsucafeBookingRequest(
+  c: Context<Env>,
+  params: {
+    accountId: string;
+    friendId: string;
+    idemKey: string;
+    startsAtRaw: string;
+    intake: unknown;
+    demo: boolean;
+  },
+) {
+  const { accountId, friendId, idemKey } = params;
+
+  const menus = await c.env.DB
+    .prepare(
+      `SELECT id, duration_minutes, buffer_after_minutes, auto_tag_id
+         FROM menus
+        WHERE line_account_id = ? AND is_active = 1 AND deleted_at IS NULL
+        LIMIT 2`,
+    )
+    .bind(accountId)
+    .all<{ id: string; duration_minutes: number; buffer_after_minutes: number; auto_tag_id: string | null }>();
+  const menu = menus.results.length === 1 ? menus.results[0] : null;
+  const staffRows = menu
+    ? await c.env.DB
+        .prepare(
+          `SELECT s.id,
+                  COALESCE(sm.override_duration_minutes, ?2) AS dur,
+                  COALESCE(sm.override_price, m.base_price) AS price
+             FROM staff s
+             INNER JOIN staff_menus sm ON sm.staff_id = s.id AND sm.menu_id = ?1 AND sm.is_offered = 1
+             INNER JOIN menus m ON m.id = ?1
+            WHERE s.line_account_id = ?3 AND s.is_active = 1 AND s.deleted_at IS NULL
+            LIMIT 2`,
+        )
+        .bind(menu.id, menu.duration_minutes, accountId)
+        .all<{ id: string; dur: number; price: number }>()
+    : { results: [] as Array<{ id: string; dur: number; price: number }> };
+  const staff = staffRows.results.length === 1 ? staffRows.results[0] : null;
+  if (!menu || !staff) {
+    console.error(
+      `[booking] konkatsucafe booking needs exactly one active menu and one staff (menus=${menus.results.length} staff=${staffRows.results.length})`,
+    );
+    return c.json({ error: 'booking_target_unavailable' }, 503);
+  }
+
+  const startsAt = new Date(params.startsAtRaw);
+  const slot = checkVisitSlot(startsAt, new Date());
+  // 断るときは項目名だけを返す（値は返さない）
+  if (slot === 'invalid_date') return c.json({ error: 'invalid_visit_datetime', invalid: ['来店希望日'] }, 422);
+  if (slot === 'invalid_time') return c.json({ error: 'invalid_visit_datetime', invalid: ['来店希望時間'] }, 422);
+  // s4: ふつうの火曜（定休）と、祝日の一覧がまだ無い範囲の火曜は受けない（画面の値を信じない）
+  if (slot === 'closed') return c.json({ error: 'closed_day', invalid: ['来店希望日'] }, 422);
+  if (slot === 'past') return c.json({ error: 'past_datetime', invalid: ['来店希望時間'] }, 422);
+
+  // お客様情報。足りない・範囲外の項目は短い呼び方だけ返す（値は返さない・ログに出さない）。
+  const checked = validateIntake(params.intake, startsAt);
+  if (!checked.ok) {
+    return c.json({ error: 'invalid_intake', missing: checked.missing, invalid: checked.invalid }, 422);
+  }
+  const intakeJson = JSON.stringify(
+    params.demo
+      ? { version: INTAKE_VERSION, values: checked.values, demo: true }
+      : { version: INTAKE_VERSION, values: checked.values },
+  );
+
+  const endsAt = new Date(startsAt.getTime() + staff.dur * 60_000);
+  const blockEndsAt = new Date(endsAt.getTime() + menu.buffer_after_minutes * 60_000);
+  const bookingId = crypto.randomUUID();
+  const nowIso = new Date().toISOString();
+  // 枠の上限を設けないので、重なりの確認（NOT EXISTS）はしない。
+  await c.env.DB
+    .prepare(
+      `INSERT INTO bookings
+        (id, line_account_id, friend_id, staff_id, menu_id,
+         starts_at, ends_at, block_ends_at, status,
+         customer_note, price_at_booking, requested_at, intake_json)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    )
+    .bind(
+      bookingId,
+      accountId,
+      friendId,
+      staff.id,
+      menu.id,
+      startsAt.toISOString(),
+      endsAt.toISOString(),
+      blockEndsAt.toISOString(),
+      'requested' satisfies BookingStatus,
+      null,
+      staff.price,
+      nowIso,
+      intakeJson,
+    )
+    .run();
+
+  // 1 人を開いたときに見えるよう、人の属性を友だち情報にも写す。既にあるほかのキーは残す
+  // （json_patch で足すだけ）。失敗しても予約は成立させる（正本は bookings.intake_json）。
+  try {
+    await c.env.DB
+      .prepare(
+        `UPDATE friends
+            SET metadata = json_patch(CASE WHEN json_valid(metadata) THEN metadata ELSE '{}' END, ?),
+                updated_at = strftime('%Y-%m-%dT%H:%M:%f', 'now', '+9 hours')
+          WHERE id = ? AND line_account_id = ?`,
+      )
+      .bind(JSON.stringify(intakeFriendMetadata(checked.values)), friendId, accountId)
+      .run();
+  } catch (err) {
+    console.error(
+      `[booking] intake metadata update failed booking=${bookingId}:`,
+      err instanceof Error ? err.message : 'unknown',
+    );
+  }
+
+  c.executionCtx.waitUntil(
+    awardActivityMileage(c.env.DB, {
+      eventType: 'booking_created',
+      source: 'booking',
+      sourceEventId: bookingId,
+      friendId,
+      metadata: { bookingType: 'salon', menuId: menu.id, staffId: staff.id },
+      occurredAt: nowIso,
+    }),
+  );
+  c.executionCtx.waitUntil(
+    notifyForBooking(c.env.DB, bookingId, 'requested', c.env.WORKER_URL).catch((err) =>
+      console.error('booking notify (requested) failed:', err),
+    ),
+  );
+  // konkatsucafe fork (L-09): 受付の時点で 1 回だけ。自動化の send_webhook がメール・シートへ流す
+  c.executionCtx.waitUntil(
+    fireCalendarBooked(c.env.DB, {
+      bookingId,
+      friendId,
+      lineAccountId: accountId,
+      menuId: menu.id,
+      staffId: staff.id,
+      startsAt: startsAt.toISOString(),
+      requestedAt: nowIso,
+      intakeJson,
+    }),
+  );
+  if (menu.auto_tag_id) {
+    const tagId = menu.auto_tag_id;
+    c.executionCtx.waitUntil(
+      attachTagAndFireSideEffects(c.env.DB, friendId, tagId, {
+        defaultAccessToken: c.env.LINE_CHANNEL_ACCESS_TOKEN,
+        workerUrl: c.env.WORKER_URL,
+      })
+        .then(() => undefined)
+        .catch((err) => console.error('booking auto-tag failed:', err)),
+    );
+  }
+
+  const responseBody = { booking_id: bookingId, status: 'requested' };
+  await saveIdempotencyResponse(c.env.DB, {
+    key: idemKey,
+    lineAccountId: accountId,
+    friendId,
+    status: 201,
+    body: responseBody,
+    ttlMinutes: IDEMPOTENCY_TTL_MINUTES,
+    now: new Date(),
+  });
+  return c.json(responseBody, 201);
 }
 
 // ================================================================
@@ -308,7 +523,14 @@ booking.get('/api/liff/booking/menus', async (c) => {
     )
     .bind(accountId)
     .all();
-  return c.json({ menus: rows.results });
+  // konkatsucafe fork (L-08): 画面が konkatsucafe の流れ（日時 → お客様情報 → 確認）にするかを伝える。
+  const mode = intakeMode(c.env);
+  const konkatsu = mode === 'konkatsucafe' || mode === 'konkatsucafe-demo';
+  return c.json({
+    menus: rows.results,
+    intake_form: konkatsu ? KONKATSUCAFE_INTAKE : null,
+    demo_notice: mode === 'konkatsucafe-demo',
+  });
 });
 
 booking.get('/api/liff/booking/menus/:id/staff', async (c) => {
@@ -375,11 +597,28 @@ booking.post('/api/liff/booking/requests', async (c) => {
     staff_id: string;
     starts_at: string; // UTC ISO8601
     customer_note?: string;
+    intake?: unknown; // konkatsucafe fork (L-08)
   }>();
-  if (!body.menu_id || !body.staff_id || !body.starts_at) {
+  // konkatsucafe fork (L-08): 設定の誤りは素通りさせない。konkatsucafe の流れでは
+  // メニュー・担当は受け口が割り当てるので、届かなくてよい。
+  const mode = intakeMode(c.env);
+  if (mode === 'invalid') {
+    console.error('[booking] BOOKING_INTAKE has an unknown value; refusing LIFF booking');
+    return c.json({ error: 'intake_misconfigured' }, 503);
+  }
+  if ((mode === 'off' && (!body.menu_id || !body.staff_id)) || !body.starts_at) {
     return c.json({ error: 'missing_params' }, 400);
   }
-  const friendId = await resolveFriendId(c, callerLineUserId, accountId);
+  // konkatsucafe fork: L Harness 導入前からの友だち（friends 行なし）は、LINE の
+  // プロフィール照会で友だちと確かめられたときだけ登録して予約を続ける。
+  let friendId = await resolveFriendId(c, callerLineUserId, accountId);
+  if (!friendId) {
+    const registered = await registerExistingFollowerForBooking(c.env.DB, {
+      lineUserId: callerLineUserId,
+      accountId,
+    });
+    if (registered.registered) friendId = registered.friendId;
+  }
   if (!friendId) return c.json({ error: 'friend_not_found' }, 404);
 
   // Idempotency lookup は account+friend スコープ。同じ key を別 caller が送っても
@@ -401,6 +640,18 @@ booking.post('/api/liff/booking/requests', async (c) => {
     .first<{ is_following: number }>();
   if (!friend || friend.is_following === 0) {
     return c.json({ error: 'cannot_book' }, 403);
+  }
+
+  // konkatsucafe fork (L-08): 日時 → お客様情報 → 確認の流れは別の関数で受ける。
+  if (mode !== 'off') {
+    return konkatsucafeBookingRequest(c, {
+      accountId,
+      friendId,
+      idemKey,
+      startsAtRaw: body.starts_at,
+      intake: body.intake,
+      demo: mode === 'konkatsucafe-demo',
+    });
   }
 
   // Menu + staff_menu lookup (must be offered)
@@ -517,9 +768,22 @@ booking.post('/api/liff/booking/requests', async (c) => {
 
   // Fire-and-forget notification — failures must not roll back the booking.
   c.executionCtx.waitUntil(
-    notifyForBooking(c.env.DB, bookingId, 'requested').catch((err) =>
+    notifyForBooking(c.env.DB, bookingId, 'requested', c.env.WORKER_URL).catch((err) =>
       console.error('booking notify (requested) failed:', err),
     ),
+  );
+  // konkatsucafe fork (L-09): calendar_booked（上流の標準の流れ。お客様情報は無い）
+  c.executionCtx.waitUntil(
+    fireCalendarBooked(c.env.DB, {
+      bookingId,
+      friendId,
+      lineAccountId: accountId,
+      menuId: body.menu_id,
+      staffId: body.staff_id,
+      startsAt: startsAt.toISOString(),
+      requestedAt: nowIso,
+      intakeJson: null,
+    }),
   );
 
   // notifyForBooking と同じく fire-and-forget。タグ付与失敗は予約成功扱い。
@@ -563,6 +827,7 @@ booking.get('/api/liff/booking/me', async (c) => {
   const upcoming = await c.env.DB
     .prepare(
       `SELECT b.id, b.starts_at, b.status, b.customer_note,
+              (b.intake_json IS NOT NULL) AS konkatsucafe,
               m.name AS menu_name,
               s.display_name AS staff_name, s.profile_image_url
          FROM bookings b
@@ -579,6 +844,7 @@ booking.get('/api/liff/booking/me', async (c) => {
   const past = await c.env.DB
     .prepare(
       `SELECT b.id, b.starts_at, b.status,
+              (b.intake_json IS NOT NULL) AS konkatsucafe,
               m.name AS menu_name,
               s.display_name AS staff_name, s.profile_image_url
          FROM bookings b
@@ -951,7 +1217,7 @@ booking.post('/api/booking/admin/bookings', async (c) => {
     console.error('Google Calendar sync (proxy-create) failed:', error);
   }
   c.executionCtx.waitUntil(
-    notifyForBooking(c.env.DB, bookingId, 'approved').catch((err) =>
+    notifyForBooking(c.env.DB, bookingId, 'approved', c.env.WORKER_URL).catch((err) =>
       console.error('booking notify (proxy-create) failed:', err),
     ),
   );
@@ -1585,8 +1851,16 @@ booking.get('/api/booking/admin/requests', async (c) => {
   const stmt = c.env.DB.prepare(sql);
   const rows = await (status === 'all' || !status
     ? (status === 'all' ? stmt.bind(accountId) : stmt.bind(accountId, 'requested'))
-    : stmt.bind(accountId, status)).all();
-  return c.json({ requests: rows.results });
+    : stmt.bind(accountId, status)).all<Record<string, unknown>>();
+  // konkatsucafe fork (L-08): お客様情報を読み戻して、1 件から取り出せる形で添える。
+  const requests = rows.results.map((row) => {
+    const intake = parseStoredIntake(row.intake_json);
+    return {
+      ...row,
+      intake: intake ? { ...intake, items: intakeItems(intake.values) } : null,
+    };
+  });
+  return c.json({ requests });
 });
 
 booking.patch('/api/booking/admin/requests/:id', async (c) => {
@@ -1629,13 +1903,13 @@ booking.patch('/api/booking/admin/requests/:id', async (c) => {
       console.error('Google Calendar sync (approve) failed:', error);
     }
     c.executionCtx.waitUntil(
-      notifyForBooking(c.env.DB, id, 'approved').catch((err) =>
+      notifyForBooking(c.env.DB, id, 'approved', c.env.WORKER_URL).catch((err) =>
         console.error('booking notify (approved) failed:', err),
       ),
     );
   } else if (next === 'rejected') {
     c.executionCtx.waitUntil(
-      notifyForBooking(c.env.DB, id, 'rejected').catch((err) =>
+      notifyForBooking(c.env.DB, id, 'rejected', c.env.WORKER_URL).catch((err) =>
         console.error('booking notify (rejected) failed:', err),
       ),
     );

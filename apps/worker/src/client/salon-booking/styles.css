@@ -182,3 +182,20 @@ body.sb-active #app {
 }
 .sb-back-btn:hover { background: #f9fafb; }
 .sb-back-btn:active { background: #f3f4f6; }
+
+/* konkatsucafe fork (L-08 s3): 日付・時間の横カルーセル。指で送り、放すと区切りで止まる */
+.kc-scroll {
+  /* 中のカードの offsetLeft を帯の中の位置にする（選んだカードを全部見える位置へ送る計算に使う） */
+  position: relative;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px 16px 6px;
+  margin: 0 -16px;
+  scroll-padding-left: 16px;
+}
+.kc-scroll::-webkit-scrollbar { display: none; }
+.kc-scroll > * { scroll-snap-align: start; flex: 0 0 auto; }

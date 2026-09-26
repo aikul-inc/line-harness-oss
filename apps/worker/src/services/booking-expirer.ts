@@ -44,6 +44,9 @@ export async function runExpirer(
          INNER JOIN friends f ON f.id = b.friend_id
         WHERE b.status = 'requested'
           AND b.requested_at < ?
+          -- konkatsucafe fork (L-08): お客様情報つきの予約は、店舗が電話で確かめてから
+          -- 確定・取り消しを決める。電話の前に期限切れの通知が届かないよう、自動では切らない
+          AND b.intake_json IS NULL
         LIMIT 200`,
     )
     .bind(cutoff)

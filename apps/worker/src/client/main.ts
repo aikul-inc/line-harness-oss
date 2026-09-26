@@ -1,3 +1,5 @@
+import { attributionFromSearch, linkRequestWithAttribution } from './ad-attribution.js';
+import { createLiffQueryReader } from '../lib/liff-query.js';
 /**
  * L Harness LIFF — The single entry point
  *
@@ -20,6 +22,7 @@
 import { initBooking } from './booking.js';
 import { initForm } from './form.js';
 import { safeRedirectTarget } from '../lib/safe-redirect.js';
+import { isTrackedLinkRedirect, waitForLinkBeforeRedirect } from './redirect-wait.js';
 
 declare const liff: {
   init(config: { liffId: string }): Promise<void>;
@@ -41,6 +44,9 @@ function detectLiffId(): string {
   if (fromParam) return fromParam;
   return import.meta.env?.VITE_LIFF_ID || '';
 }
+const initialAttribution = attributionFromSearch(window.location.search);
+const initialParams = new URLSearchParams(window.location.search);
+const initialRef = createLiffQueryReader(key => initialParams.get(key) ?? undefined)('ref');
 const LIFF_ID = detectLiffId();
 if (!LIFF_ID) {
   throw new Error('LIFF ID not found. Set ?liffId= in LIFF endpoint URL or VITE_LIFF_ID env.');
@@ -50,6 +56,7 @@ const UUID_STORAGE_KEY = 'lh_uuid';
 let BOT_BASIC_ID = '';
 
 function apiCall(path: string, options?: RequestInit): Promise<Response> {
+  if (path === '/api/liff/link') options = linkRequestWithAttribution(options, initialAttribution, window.location.search);
   return fetch(path, {
     ...options,
     headers: {
@@ -77,7 +84,7 @@ function getRedirectUrl(): string | null {
 
 function getRef(): string | null {
   const params = new URLSearchParams(window.location.search);
-  return params.get('ref');
+  return createLiffQueryReader(key => params.get(key) ?? undefined)('ref') || initialRef || null;
 }
 
 function getSavedUuid(): string | null {
@@ -287,12 +294,10 @@ async function linkAndAddFlow() {
 
     // 3. Redirect flow (for wrapped URLs)
     if (redirectUrl) {
-      await Promise.race([
-        linkPromise,
-        new Promise((r) => setTimeout(r, 500)),
-      ]);
+      // konkatsucafe fork (L-06): 計測リンクへ戻るときは、前からの友だちの登録を待つ（最長 3 秒）
+      await waitForLinkBeforeRedirect(linkPromise, redirectUrl);
       // Append LINE userId to tracking links so clicks are attributed
-      if (redirectUrl.includes('/t/')) {
+      if (isTrackedLinkRedirect(redirectUrl)) {
         const sep = redirectUrl.includes('?') ? '&' : '?';
         window.location.href = `${redirectUrl}${sep}lu=${encodeURIComponent(profile.userId)}`;
       } else {
@@ -427,6 +432,8 @@ async function initSalonBooking(): Promise<void> {
     liffId: LIFF_ID,
     lineUserId: profile.userId,
     idToken,
+    displayName: profile.displayName,
+    pictureUrl: profile.pictureUrl,
   });
 }
 

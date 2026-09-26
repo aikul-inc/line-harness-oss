@@ -126,19 +126,7 @@ export async function fireOutgoingWebhooks(
 
         // HMAC署名（シークレットがある場合）
         if (wh.secret) {
-          const encoder = new TextEncoder();
-          const key = await crypto.subtle.importKey(
-            'raw',
-            encoder.encode(wh.secret),
-            { name: 'HMAC', hash: 'SHA-256' },
-            false,
-            ['sign'],
-          );
-          const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
-          const hexSignature = Array.from(new Uint8Array(signature))
-            .map((b) => b.toString(16).padStart(2, '0'))
-            .join('');
-          headers['X-Webhook-Signature'] = hexSignature;
+          headers['X-Webhook-Signature'] = await hmacSha256Hex(wh.secret, body);
         }
 
         const res = await fetch(wh.url, { method: 'POST', headers, body });
@@ -155,6 +143,35 @@ export async function fireOutgoingWebhooks(
     console.error('fireOutgoingWebhooks error:', err);
   }
   return delivered;
+}
+
+/** 本文の HMAC-SHA256（16 進）。送信 Webhook と send_webhook の署名 `X-Webhook-Signature` */
+export async function hmacSha256Hex(secret: string, body: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
+  return Array.from(new Uint8Array(signature))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** konkatsucafe fork (L-09): send_webhook の相手の応答を待つ上限 */
+export const SEND_WEBHOOK_TIMEOUT_MS = 10_000;
+
+/**
+ * konkatsucafe fork (L-09): 自動化の実行ログに残す出来事の中身。
+ * お客様情報（calendar_booked の intake）は伏せる。正本は bookings.intake_json にある
+ */
+function eventDataForLog(eventData: Record<string, unknown> | undefined): string {
+  const data = { ...(eventData ?? {}) };
+  if (data.intake !== undefined && data.intake !== null) data.intake = '[omitted]';
+  return JSON.stringify(data);
 }
 
 /** スコアリングルール適用 */
@@ -212,7 +229,7 @@ async function processAutomations(
       await createAutomationLog(db, {
         automationId: automation.id,
         friendId: payload.friendId,
-        eventData: JSON.stringify(payload.eventData ?? {}),
+        eventData: eventDataForLog(payload.eventData),
         actionsResult: JSON.stringify(results),
         status: allSuccess ? 'success' : anySuccess ? 'partial' : 'failed',
       });
@@ -384,11 +401,20 @@ async function executeAction(
     case 'send_webhook': {
       const url = action.params.url;
       if (url) {
-        await fetch(url, {
+        const body = JSON.stringify({ friendId, ...payload.eventData });
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        // konkatsucafe fork (L-09): secret があれば送信 Webhook と同じ形で署名する。
+        // 受け手が 2xx 以外を返した・時間切れは失敗として実行ログに残す
+        if (action.params.secret) {
+          headers['X-Webhook-Signature'] = await hmacSha256Hex(action.params.secret, body);
+        }
+        const res = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ friendId, ...payload.eventData }),
+          headers,
+          body,
+          signal: AbortSignal.timeout(SEND_WEBHOOK_TIMEOUT_MS),
         });
+        if (!res.ok) throw new Error(`send_webhook HTTP ${res.status}`);
       }
       break;
     }

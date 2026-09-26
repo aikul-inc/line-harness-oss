@@ -195,7 +195,7 @@ describe('tracked-link destination validation', () => {
 describe('GET /t/:linkId — per-account LIFF resolution', () => {
   test('link owned by an account redirects LINE in-app clicks to that account LIFF', async () => {
     dbMocks.getTrackedLinkByIdOrShortCode.mockResolvedValue(makeLink({ line_account_id: 'acc-1b' }));
-    const env = {
+    const env = { DELIVERY_MODE: 'enabled',
       DB: makeDb({ accounts: [{ id: 'acc-1b', liff_id: '2009668520-YghzbHx9' }] }),
       LIFF_URL: 'https://liff.line.me/2009554425-4IMBmLQ9',
       WORKER_URL: 'https://worker.example.com',
@@ -209,7 +209,7 @@ describe('GET /t/:linkId — per-account LIFF resolution', () => {
 
   test('falls back to scenario account when link has no line_account_id', async () => {
     dbMocks.getTrackedLinkByIdOrShortCode.mockResolvedValue(makeLink({ scenario_id: 'scn-1' }));
-    const env = {
+    const env = { DELIVERY_MODE: 'enabled',
       DB: makeDb({
         scenarios: [{ id: 'scn-1', line_account_id: 'acc-2' }],
         accounts: [{ id: 'acc-2', liff_id: '2009590922-I2FwUvxr' }],
@@ -224,7 +224,7 @@ describe('GET /t/:linkId — per-account LIFF resolution', () => {
 
   test('falls back to env.LIFF_URL when no owning account is resolvable', async () => {
     dbMocks.getTrackedLinkByIdOrShortCode.mockResolvedValue(makeLink());
-    const env = {
+    const env = { DELIVERY_MODE: 'enabled',
       DB: makeDb({}),
       LIFF_URL: 'https://liff.line.me/2009554425-4IMBmLQ9',
       WORKER_URL: 'https://worker.example.com',
@@ -236,7 +236,7 @@ describe('GET /t/:linkId — per-account LIFF resolution', () => {
 
   test('account without liff_id falls back to env.LIFF_URL', async () => {
     dbMocks.getTrackedLinkByIdOrShortCode.mockResolvedValue(makeLink({ line_account_id: 'acc-x' }));
-    const env = {
+    const env = { DELIVERY_MODE: 'enabled',
       DB: makeDb({ accounts: [{ id: 'acc-x', liff_id: null }] }),
       LIFF_URL: 'https://liff.line.me/2009554425-4IMBmLQ9',
       WORKER_URL: 'https://worker.example.com',
@@ -248,7 +248,7 @@ describe('GET /t/:linkId — per-account LIFF resolution', () => {
 
   test('non-LINE browsers redirect straight to the original URL', async () => {
     dbMocks.getTrackedLinkByIdOrShortCode.mockResolvedValue(makeLink({ line_account_id: 'acc-1b' }));
-    const env = {
+    const env = { DELIVERY_MODE: 'enabled',
       DB: makeDb({ accounts: [{ id: 'acc-1b', liff_id: '2009668520-YghzbHx9' }] }),
       LIFF_URL: 'https://liff.line.me/2009554425-4IMBmLQ9',
       WORKER_URL: 'https://worker.example.com',
@@ -269,7 +269,7 @@ describe('GET /t/:linkId — short codes', () => {
     dbMocks.getTrackedLinkByIdOrShortCode.mockResolvedValue(
       makeLink({ id: 'uuid-link-1', short_code: 'Ab3xY9k' }),
     );
-    const env = {
+    const env = { DELIVERY_MODE: 'enabled',
       DB: makeDb({}),
       LIFF_URL: 'https://liff.line.me/2009554425-4IMBmLQ9',
       WORKER_URL: 'https://worker.example.com',
@@ -292,7 +292,7 @@ describe('GET /t/:linkId — short codes', () => {
     dbMocks.getTrackedLinkByIdOrShortCode.mockResolvedValue(
       makeLink({ id: 'uuid-link-1', short_code: 'Ab3xY9k', line_account_id: 'acc-1b' }),
     );
-    const env = {
+    const env = { DELIVERY_MODE: 'enabled',
       DB: makeDb({ accounts: [{ id: 'acc-1b', liff_id: '2009668520-YghzbHx9' }] }),
       LIFF_URL: 'https://liff.line.me/2009554425-4IMBmLQ9',
       WORKER_URL: 'https://worker.example.com',

@@ -1,3 +1,5 @@
+import { readAdAttribution, withAdAttribution } from '../lib/ad-attribution.js';
+import { deliveryEnabled, deliverySuppressed } from '../lib/delivery-policy.js';
 import { Hono } from 'hono';
 import {
   getTrackedLinks,
@@ -326,6 +328,11 @@ trackedLinks.get('/t/:linkId', async (c) => {
     return c.json({ success: false, error: 'Invalid link destination' }, 400);
   }
 
+  const ad = readAdAttribution(key => c.req.query(key));
+  const destination = withAdAttribution(link.original_url, ad);
+  const destinationParams = new URL(destination).searchParams;
+  const destinationAd = readAdAttribution(key => destinationParams.get(key));
+
   // Bot UA (LINE/X/Facebook 等のリンクプレビュー) → OGP HTML を返して終了。
   // クリック記録もスキップ（bot のアクセスは CV ではない）。
   const ua = c.req.header('user-agent') || '';
@@ -353,8 +360,8 @@ trackedLinks.get('/t/:linkId', async (c) => {
     if (liffId) liffBase = `https://liff.line.me/${liffId}`;
     if (!liffBase && c.env.LIFF_URL) liffBase = c.env.LIFF_URL;
     if (liffBase) {
-      const directUrl = `${c.env.WORKER_URL || new URL(c.req.url).origin}/t/${linkId}`;
-      const liffRedirect = `${liffBase}?redirect=${encodeURIComponent(directUrl)}`;
+      const directUrl = withAdAttribution(`${c.env.WORKER_URL || new URL(c.req.url).origin}/t/${encodeURIComponent(linkId)}`, destinationAd);
+      const liffRedirect = withAdAttribution(`${liffBase}?redirect=${encodeURIComponent(directUrl)}`, destinationAd);
       return c.redirect(liffRedirect, 302);
     }
   }
@@ -375,6 +382,7 @@ trackedLinks.get('/t/:linkId', async (c) => {
         // Record the click (link.id, not the raw param — it may be a short code)
         const click = await recordLinkClick(c.env.DB, link.id, friendId);
 
+        if (!deliveryEnabled(c.env)) { deliverySuppressed('tracked-actions'); return; }
         if (friendId) {
           await awardActivityMileage(c.env.DB, {
             eventType: 'link_clicked',
@@ -418,10 +426,10 @@ trackedLinks.get('/t/:linkId', async (c) => {
 
   // App-link domains: return HTML with JS redirect for Universal Link support
   if (useAppRedirect) {
-    return c.html(buildAppRedirectHtml(link.original_url));
+    return c.html(buildAppRedirectHtml(destination));
   }
 
-  return c.redirect(link.original_url, 302);
+  return c.redirect(destination, 302);
 });
 
 export { trackedLinks };

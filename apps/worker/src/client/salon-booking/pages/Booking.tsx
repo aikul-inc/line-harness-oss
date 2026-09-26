@@ -4,6 +4,7 @@ import StaffList from '../components/StaffList.js';
 import DateTimePicker from '../components/DateTimePicker.js';
 import Confirm from '../components/Confirm.js';
 import Done from '../components/Done.js';
+import KonkatsucafeBooking from './KonkatsucafeBooking.js';
 import { useSalonContext } from '../lib/context.js';
 import { createApi, type MenuItem, type StaffItem } from '../lib/api.js';
 
@@ -35,6 +36,25 @@ export default function Booking({
   // メニュー一覧を出す方が「初回オリエン直リンク経由なのに別メニュー
   // を選ばれる」事故より安全）。
   const [deepLinkResolving, setDeepLinkResolving] = useState(Boolean(initialMenuId));
+  // konkatsucafe fork (L-08): Worker が konkatsucafe の流れ（日時 → お客様情報 → 確認）を求めるか。
+  // メニューの応答で分かるまでは何も出さない（メニューの画面が一瞬出ないように）。
+  const [flow, setFlow] = useState<{ konkatsucafe: boolean; demoNotice: boolean } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    createApi(ctx)
+      .menus()
+      .then((res) => {
+        if (!cancelled) setFlow({ konkatsucafe: Boolean(res.intake_form), demoNotice: Boolean(res.demo_notice) });
+      })
+      .catch(() => {
+        // 取れなければ上流の流れにする（メニューの一覧が同じ API のエラーを出す）
+        if (!cancelled) setFlow({ konkatsucafe: false, demoNotice: false });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ctx]);
 
   useEffect(() => {
     if (!initialMenuId) return;
@@ -68,6 +88,16 @@ export default function Booking({
     exitPeek();
     setStep('confirm');
   }
+
+  if (!flow) {
+    return (
+      <div className="flex flex-col items-center py-12">
+        <div className="sb-spinner" />
+        <p className="text-sm text-gray-500 mt-3">読み込み中…</p>
+      </div>
+    );
+  }
+  if (flow.konkatsucafe) return <KonkatsucafeBooking demoNotice={flow.demoNotice} />;
 
   const showStepper = step !== 'done';
   const stepIdx = STEPS.findIndex((s) => s.key === step);

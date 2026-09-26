@@ -216,7 +216,7 @@ describe('POST /api/booking/admin/bookings', () => {
     expect(body.status).toBe('confirmed');
     const insert = db.calls.find((c) => c.sql.includes('INSERT INTO bookings'));
     expect(insert?.params).toContain('confirmed');
-    // booking_reminders INSERT が走っている(未来の予約なので day_before + hours_before)
+    // booking_reminders INSERT が走っている(未来の予約なので day_before。fork 既定で hours_before は作らない)
     const reminders = db.calls.filter((c) => c.sql.includes('INSERT INTO booking_reminders'));
     expect(reminders.length).toBeGreaterThan(0);
   });

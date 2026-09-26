@@ -1,3 +1,4 @@
+import { deliveryEnabled, deliverySuppressed } from './lib/delivery-policy.js';
 import { LineClient } from '@line-crm/line-sdk';
 import {
   getLineAccounts,
@@ -66,6 +67,10 @@ export async function scheduled(
   env: Env['Bindings'],
   ctx: ExecutionContext,
 ): Promise<void> {
+  if (!deliveryEnabled(env)) {
+    deliverySuppressed('scheduled');
+    return;
+  }
   // Get all active accounts from DB
   const dbAccounts = await getLineAccounts(env.DB);
 
@@ -109,6 +114,7 @@ export async function scheduled(
       now: new Date(),
       sender: sendBookingNotification,
       reminderHoursBefore: DEFAULT_ACCOUNT_SETTINGS.reminder_hours_before,
+      workerUrl: env.WORKER_URL,
     });
     if (result.sent + result.failed > 0) {
       console.log(`[booking-reminders] sent=${result.sent} failed=${result.failed}`);
