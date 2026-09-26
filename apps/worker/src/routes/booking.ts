@@ -33,6 +33,7 @@ import {
 import { insertConfirmationReminders } from '../services/booking-confirm.js';
 import { attachTagAndFireSideEffects } from '../services/friend-tag-attach.js';
 import { registerExistingFollowerForBooking } from '../services/booking-friend.js';
+import { fireCalendarBooked } from '../services/booking-events.js';
 import {
   INTAKE_VERSION,
   KONKATSUCAFE_INTAKE,
@@ -466,6 +467,19 @@ async function konkatsucafeBookingRequest(
       console.error('booking notify (requested) failed:', err),
     ),
   );
+  // konkatsucafe fork (L-09): 受付の時点で 1 回だけ。自動化の send_webhook がメール・シートへ流す
+  c.executionCtx.waitUntil(
+    fireCalendarBooked(c.env.DB, {
+      bookingId,
+      friendId,
+      lineAccountId: accountId,
+      menuId: menu.id,
+      staffId: staff.id,
+      startsAt: startsAt.toISOString(),
+      requestedAt: nowIso,
+      intakeJson,
+    }),
+  );
   if (menu.auto_tag_id) {
     const tagId = menu.auto_tag_id;
     c.executionCtx.waitUntil(
@@ -757,6 +771,19 @@ booking.post('/api/liff/booking/requests', async (c) => {
     notifyForBooking(c.env.DB, bookingId, 'requested', c.env.WORKER_URL).catch((err) =>
       console.error('booking notify (requested) failed:', err),
     ),
+  );
+  // konkatsucafe fork (L-09): calendar_booked（上流の標準の流れ。お客様情報は無い）
+  c.executionCtx.waitUntil(
+    fireCalendarBooked(c.env.DB, {
+      bookingId,
+      friendId,
+      lineAccountId: accountId,
+      menuId: body.menu_id,
+      staffId: body.staff_id,
+      startsAt: startsAt.toISOString(),
+      requestedAt: nowIso,
+      intakeJson: null,
+    }),
   );
 
   // notifyForBooking と同じく fire-and-forget。タグ付与失敗は予約成功扱い。

@@ -68,7 +68,7 @@ CREATE INDEX idx_automation_logs_automation ON automation_logs (automation_id);
 | `tag_change` | タグ付与/削除 | `friendId`, `eventData.tagId` |
 | `score_threshold` | スコア閾値到達 | `friendId`, `eventData.currentScore` |
 | `cv_fire` | コンバージョン発生 | `friendId`, `eventData` |
-| `calendar_booked` | カレンダー予約 | `friendId`, `eventData` |
+| `calendar_booked` | カレンダー予約（konkatsucafe fork: LIFF からの予約の受付 `requested` で 1 回。確定・代理作成では発火しない。LINE の鍵を渡さないので `send_message` は失敗になる） | `friendId`, `eventData.bookingId`・`status`・`startsAt`・`requestedAt`・`menuId`・`staffId`・`source`・`intake` |
 | `incoming_webhook.*` | 外部Webhook受信 | `eventData.webhookId`, `eventData.source`, `eventData.payload` |
 
 ## アクションタイプ（8種）
@@ -79,7 +79,7 @@ CREATE INDEX idx_automation_logs_automation ON automation_logs (automation_id);
 | `remove_tag` | `{ tagId: string }` | タグを削除 |
 | `start_scenario` | `{ scenarioId: string }` | シナリオに登録 |
 | `send_message` | `{ content: string, messageType?: string, altText?: string }` | LINE メッセージ送信。`messageType` は `text`（デフォルト）または `flex` |
-| `send_webhook` | `{ url: string }` | 外部URLにPOSTリクエスト |
+| `send_webhook` | `{ url: string, secret?: string }` | 外部URLにPOSTリクエスト（本文は `{ friendId, ...eventData }`）。konkatsucafe fork: `secret` があれば `X-Webhook-Signature`（本文の HMAC-SHA256、16 進。送信Webhookと同じ）を付ける。2xx 以外・10 秒超えは失敗として記録 |
 | `switch_rich_menu` | `{ richMenuId: string }` | リッチメニューを切替 |
 | `remove_rich_menu` | `{}` | リッチメニューのアサインを解除 |
 | `set_metadata` | `{ data: string }` | friends.metadataにJSONをマージ |
