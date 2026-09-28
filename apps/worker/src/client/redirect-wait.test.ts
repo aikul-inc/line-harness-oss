@@ -5,6 +5,7 @@ import {
   isTrackedLinkRedirect,
   linkWaitBeforeRedirectMs,
   waitForLinkBeforeRedirect,
+  redirectAfterIdentificationFailure,
 } from './redirect-wait.js';
 
 // konkatsucafe fork (L-06): 計測リンクへ戻る前だけ、前からの友だちの登録を最長 3 秒待つ。
@@ -38,5 +39,14 @@ describe('wait for /api/liff/link before leaving LIFF', () => {
     await expect(
       waitForLinkBeforeRedirect(Promise.reject(new Error('network')), 'https://w.example/t/abc', () => new Promise(() => {})),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('L-06 s2: identification failure goes back to /t once, without looping', () => {
+  it('marks tracked-link redirects with lh_noid=1 exactly once and leaves others alone', () => {
+    expect(redirectAfterIdentificationFailure('https://w.example/t/abc?utm_source=x')).toBe('https://w.example/t/abc?utm_source=x&lh_noid=1');
+    expect(redirectAfterIdentificationFailure('https://w.example/t/abc')).toBe('https://w.example/t/abc?lh_noid=1');
+    expect(redirectAfterIdentificationFailure('https://w.example/t/abc?lh_noid=1')).toBe('https://w.example/t/abc?lh_noid=1');
+    expect(redirectAfterIdentificationFailure('https://lp.example/x')).toBe('https://lp.example/x');
   });
 });

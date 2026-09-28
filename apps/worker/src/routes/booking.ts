@@ -1,3 +1,4 @@
+import { saveBookingAttribution } from '../services/booking-attribution.js';
 // Booking feature HTTP routes.
 //
 // LIFF-facing endpoints live under /api/liff/booking/* (auth-bypassed by
@@ -598,6 +599,8 @@ booking.post('/api/liff/booking/requests', async (c) => {
     starts_at: string; // UTC ISO8601
     customer_note?: string;
     intake?: unknown; // konkatsucafe fork (L-08)
+    attribution?: unknown; // konkatsucafe fork (L-06 s2): 予約画面を開いた URL の広告値
+    tracked_link?: unknown; // konkatsucafe fork (L-06 s2): 計測リンクの印（lh_link）
   }>();
   // konkatsucafe fork (L-08): 設定の誤りは素通りさせない。konkatsucafe の流れでは
   // メニュー・担当は受け口が割り当てるので、届かなくてよい。
@@ -641,6 +644,15 @@ booking.post('/api/liff/booking/requests', async (c) => {
   if (!friend || friend.is_following === 0) {
     return c.json({ error: 'cannot_book' }, 403);
   }
+
+  // konkatsucafe fork (L-06 s2): 本人を確かめたあとで、開いた URL の広告値と計測リンクの印を
+  // 友だち情報に残す（/t の結び付けが落ちても計測を埋める）。失敗しても予約は続ける。
+  await saveBookingAttribution(c.env.DB, {
+    friendId,
+    accountId,
+    attribution: body.attribution,
+    trackedLink: body.tracked_link,
+  });
 
   // konkatsucafe fork (L-08): 日時 → お客様情報 → 確認の流れは別の関数で受ける。
   if (mode !== 'off') {

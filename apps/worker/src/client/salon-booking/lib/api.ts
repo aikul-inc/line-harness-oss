@@ -136,7 +136,8 @@ export function createApi(ctx: SalonBookingContext) {
     ) =>
       post<{ booking_id: string; status: string }>(
         '/api/liff/booking/requests',
-        body,
+        // konkatsucafe fork (L-06 s2): 開いた URL の広告値と計測リンクの印を添える（受け口が検証する）
+        { ...body, attribution: ctx.attribution ?? {}, tracked_link: ctx.trackedLink ?? null },
         ctx,
         { 'Idempotency-Key': idempotencyKey },
       ),

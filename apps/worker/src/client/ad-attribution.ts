@@ -1,4 +1,4 @@
-import { cleanAdAttribution, readLiffAdAttribution, type AdAttribution } from '../lib/ad-attribution.js';
+import { cleanAdAttribution, readLiffAdAttribution, readLiffTrackedLinkMarker, type AdAttribution } from '../lib/ad-attribution.js';
 
 export function attributionFromSearch(search: string): AdAttribution {
   const params = new URLSearchParams(search);
@@ -21,4 +21,10 @@ export function linkRequestWithAttribution(
       attribution: cleanAdAttribution({ ...initial, ...attributionFromSearch(currentSearch) }),
     }),
   };
+}
+
+/** konkatsucafe fork (L-06 s2): 開いた URL（liff.state を含む）から計測リンクの印を読む。 */
+export function trackedLinkFromSearch(search: string): string | null {
+  const params = new URLSearchParams(search);
+  return readLiffTrackedLinkMarker((key) => params.get(key) ?? undefined);
 }
