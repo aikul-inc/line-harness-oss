@@ -15,6 +15,10 @@ export interface SalonBookingContext {
   displayName?: string;
   /** konkatsucafe fork (L-08 s3): LINE のプロフィールのアイコン。「LINE名」欄に名前と並べて出す */
   pictureUrl?: string;
+  /** konkatsucafe fork (L-06 s2): 開いた URL の広告値（liff.init より前に読んだもの）。予約の受け口へ添える */
+  attribution?: Record<string, string>;
+  /** konkatsucafe fork (L-06 s2): 開いた URL の計測リンクの印（lh_link）。受け口が照合する */
+  trackedLink?: string | null;
 }
 
 const Ctx = createContext<SalonBookingContext | null>(null);

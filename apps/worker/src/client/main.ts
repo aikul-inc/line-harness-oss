@@ -1,4 +1,4 @@
-import { attributionFromSearch, linkRequestWithAttribution } from './ad-attribution.js';
+import { attributionFromSearch, linkRequestWithAttribution, trackedLinkFromSearch } from './ad-attribution.js';
 import { createLiffQueryReader } from '../lib/liff-query.js';
 /**
  * L Harness LIFF — The single entry point
@@ -22,7 +22,7 @@ import { createLiffQueryReader } from '../lib/liff-query.js';
 import { initBooking } from './booking.js';
 import { initForm } from './form.js';
 import { safeRedirectTarget } from '../lib/safe-redirect.js';
-import { isTrackedLinkRedirect, waitForLinkBeforeRedirect } from './redirect-wait.js';
+import { isTrackedLinkRedirect, redirectAfterIdentificationFailure, waitForLinkBeforeRedirect } from './redirect-wait.js';
 
 declare const liff: {
   init(config: { liffId: string }): Promise<void>;
@@ -45,6 +45,7 @@ function detectLiffId(): string {
   return import.meta.env?.VITE_LIFF_ID || '';
 }
 const initialAttribution = attributionFromSearch(window.location.search);
+const initialTrackedLink = trackedLinkFromSearch(window.location.search);
 const initialParams = new URLSearchParams(window.location.search);
 const initialRef = createLiffQueryReader(key => initialParams.get(key) ?? undefined)('ref');
 const LIFF_ID = detectLiffId();
@@ -344,7 +345,8 @@ async function linkAndAddFlow() {
 
   } catch (err) {
     if (redirectUrl) {
-      window.location.href = redirectUrl;
+      // konkatsucafe fork (L-06 s2): 本人を確かめられなかったことを /t に伝え、LIFF との行き来を止める
+      window.location.href = redirectAfterIdentificationFailure(redirectUrl);
     } else {
       showError(err instanceof Error ? err.message : 'エラーが発生しました');
     }
@@ -434,6 +436,9 @@ async function initSalonBooking(): Promise<void> {
     idToken,
     displayName: profile.displayName,
     pictureUrl: profile.pictureUrl,
+    // konkatsucafe fork (L-06 s2): 予約の受け口で広告値と計測リンクの印を友だち情報に残す
+    attribution: { ...initialAttribution, ...attributionFromSearch(window.location.search) },
+    trackedLink: trackedLinkFromSearch(window.location.search) ?? initialTrackedLink,
   });
 }
 

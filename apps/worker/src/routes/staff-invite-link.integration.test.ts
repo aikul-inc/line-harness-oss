@@ -7,7 +7,8 @@ import { readFileSync } from 'node:fs';
 import { URL as NodeURL } from 'node:url';
 import worker from '../index.js';
 import { sqliteD1 } from '../test-support/sqlite-d1.js';
-import { attributionFromSearch, linkRequestWithAttribution } from '../client/ad-attribution.js';
+import { redirectAfterIdentificationFailure } from '../client/redirect-wait.js';
+import { attributionFromSearch, linkRequestWithAttribution, trackedLinkFromSearch } from '../client/ad-attribution.js';
 
 const schema = readFileSync(new NodeURL('../../../../packages/db/bootstrap.sql', import.meta.url), 'utf8');
 afterEach(() => vi.restoreAllMocks());
@@ -142,14 +143,14 @@ function setup(options: { profileStatus?: number; noAccounts?: boolean } = {}) {
     return r;
   }
   const admin = { Authorization: 'Bearer synthetic-key', 'Content-Type': 'application/json' };
-  async function createLink() {
+  async function createLink(lineAccountId = 'a', originalUrl = DESTINATION) {
     const r = await request('/api/tracked-links', {
       method: 'POST',
       headers: admin,
       body: JSON.stringify({
         name: '【デモ】スタッフ向け予約のご案内 2026-09-26',
-        originalUrl: DESTINATION,
-        lineAccountId: 'a',
+        originalUrl,
+        lineAccountId,
       }),
     });
     expect(r.status).toBe(201);
@@ -166,7 +167,7 @@ function setup(options: { profileStatus?: number; noAccounts?: boolean } = {}) {
   }
   const date = new Date(`${jstDate(3)}T00:00:00Z`).getUTCDay() === 2 ? jstDate(4) : jstDate(3);
   const startsAt = new Date(`${date}T14:00:00+09:00`).toISOString();
-  async function book(idToken: string) {
+  async function book(idToken: string, extra: Record<string, unknown> = {}) {
     return request(`/api/liff/booking/requests?liffId=${LIFF_ID}`, {
       method: 'POST',
       headers: {
@@ -174,7 +175,7 @@ function setup(options: { profileStatus?: number; noAccounts?: boolean } = {}) {
         'Idempotency-Key': crypto.randomUUID(),
         Authorization: `Bearer ${idToken}`,
       },
-      body: JSON.stringify({ starts_at: startsAt, intake: INTAKE }),
+      body: JSON.stringify({ starts_at: startsAt, intake: INTAKE, ...extra }),
     });
   }
   const count = (table: string) => (sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
@@ -345,6 +346,121 @@ describe('staff invite: tracked link → LIFF → click → booking for a follow
       expect(r.status).toBe(200);
       expect(await r.text()).toContain('og:title');
       expect(s.count('link_clicks')).toBe(0);
+    } finally {
+      s.sqlite.close();
+    }
+  });
+});
+
+// L-06 s2（docs/spec/2026-09-28-l06-booking-attribution.md）: 2026-09-28 の実機で、LINE Login が
+// 開発中で LIFF の本人確認が落ち、/t に lu なしで戻ってクリックが誰でもない人になった。
+// 予約の受け口が、予約画面の URL の広告値と計測リンクの印を友だち情報に残して埋める。
+describe('L-06 s2: booking fills ad values and the tracked-link marker when the /t identification fails', () => {
+  const SAFARI_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1';
+  /** 予約画面（LIFF）が開いた URL から、main.ts と同じように広告値と印を読んで予約に添える。 */
+  function fromLiffUrl(url: URL) {
+    return { attribution: attributionFromSearch(url.search), tracked_link: trackedLinkFromSearch(url.search) };
+  }
+  const meta = (s: ReturnType<typeof setup>, lineUserId: string): Record<string, unknown> =>
+    JSON.parse((s.sqlite.prepare('SELECT metadata FROM friends WHERE line_user_id=?').get(lineUserId) as { metadata: string }).metadata);
+
+  it('LINE in-app: LIFF identification fails (Login 400), bounce without lu, then booking fills utm + marker', async () => {
+    const s = setup();
+    try {
+      const link = await s.createLink();
+      const first = await s.request(new URL(link.trackingUrl).pathname, { headers: { 'user-agent': LINE_UA } });
+      const liff = new URL(first.headers.get('location')!);
+      // LINE Login が開発中: IDトークンが取れず /api/liff/link は 401。LIFF は lu なしで /t に戻る（main.ts の catch）
+      expect((await s.liffLink(liff, 'forged')).status).toBe(401);
+      // 直す前の LIFF は lh_noid なしで戻り、/t がまた LIFF へ回す（記録されない・行き来する）
+      const bounce = new URL(liff.searchParams.get('redirect')!);
+      const loop = await s.request(`${bounce.pathname}${bounce.search}`, { headers: { 'user-agent': LINE_UA } });
+      expect(new URL(loop.headers.get('location')!).hostname).toBe('liff.line.me');
+      expect(s.count('link_clicks')).toBe(0);
+      const back = new URL(redirectAfterIdentificationFailure(bounce.toString()));
+      const second = await s.request(`${back.pathname}${back.search}`, { headers: { 'user-agent': LINE_UA } });
+      expect(s.sqlite.prepare('SELECT friend_id FROM link_clicks').all()).toEqual([{ friend_id: null }]);
+      const dest = new URL(second.headers.get('location')!);
+      expect(dest.searchParams.get('lh_link')).toBe(new URL(link.trackingUrl).pathname.slice(3));
+      for (const [k, v] of Object.entries(UTM)) expect(dest.searchParams.get(k), k).toBe(v);
+
+      // Login が直ったあと、予約画面から予約する（前からの友だちなので予約の時点で登録される）
+      const created = await s.book('token-user-early', fromLiffUrl(dest));
+      expect(created.status).toBe(201);
+      expect(meta(s, 'user-early')).toMatchObject({ ...UTM, tracked_link_id: link.id });
+      // クリックの記録は書き換えない（事実のまま）
+      expect(s.sqlite.prepare('SELECT friend_id FROM link_clicks').all()).toEqual([{ friend_id: null }]);
+      expect(s.pushes).toHaveLength(1);
+    } finally {
+      s.sqlite.close();
+    }
+  });
+
+  it('Safari (outside LINE): click is anonymous, destination keeps utm + marker through liff.state, booking fills them', async () => {
+    const s = setup();
+    try {
+      const link = await s.createLink();
+      const r = await s.request(new URL(link.trackingUrl).pathname, { headers: { 'user-agent': SAFARI_UA } });
+      expect(r.status).toBe(302);
+      const dest = new URL(r.headers.get('location')!);
+      // LIFF の外では liff.login から戻ると、追加の情報は liff.state に入る
+      const state = `?${dest.searchParams.toString()}`;
+      const afterLogin = new URL(`https://synthetic.example/?liffId=${LIFF_ID}&liff.state=${encodeURIComponent(state)}`);
+      expect((await s.book('token-user-early', fromLiffUrl(afterLogin))).status).toBe(201);
+      expect(meta(s, 'user-early')).toMatchObject({ ...UTM, tracked_link_id: link.id });
+    } finally {
+      s.sqlite.close();
+    }
+  });
+
+  it('refuses a marker of another account and saves nothing (booking still succeeds)', async () => {
+    const s = setup();
+    try {
+      const other = await s.createLink('b');
+      const code = new URL(other.trackingUrl).pathname.slice(3);
+      const r = await s.book('token-user-known', { attribution: UTM, tracked_link: code });
+      expect(r.status).toBe(201);
+      expect(Object.keys(meta(s, 'user-known')).filter((k) => k.startsWith('utm_') || k === 'tracked_link_id')).toEqual([]);
+    } finally {
+      s.sqlite.close();
+    }
+  });
+
+  it('refuses unknown, inactive or malformed markers (fail-closed)', async () => {
+    const s = setup();
+    try {
+      const link = await s.createLink();
+      s.sqlite.prepare('UPDATE tracked_links SET is_active=0 WHERE id=?').run(link.id);
+      for (const tracked_link of [new URL(link.trackingUrl).pathname.slice(3), 'nope123', '../x', 'a'.repeat(65), 42]) {
+        expect((await s.book('token-user-known', { attribution: UTM, tracked_link })).status).toBe(201);
+      }
+      expect(Object.keys(meta(s, 'user-known')).filter((k) => k.startsWith('utm_') || k === 'tracked_link_id')).toEqual([]);
+    } finally {
+      s.sqlite.close();
+    }
+  });
+
+  it('without a marker keeps the /api/liff/link policy: valid values update per key, empty/invalid never erase', async () => {
+    const s = setup();
+    try {
+      s.sqlite.prepare("UPDATE friends SET metadata=? WHERE id='f-known'").run(
+        JSON.stringify({ utm_source: 'old', utm_term: 'kept', keep: 'x' }),
+      );
+      await s.book('token-user-known', { attribution: { utm_source: 'line_demo', utm_medium: ' ', utm_term: 'bad\nvalue', userId: 'U-injected' } });
+      expect(meta(s, 'user-known')).toMatchObject({ utm_source: 'line_demo', utm_term: 'kept', keep: 'x' });
+      expect(meta(s, 'user-known')).not.toHaveProperty('utm_medium');
+      expect(meta(s, 'user-known')).not.toHaveProperty('userId');
+    } finally {
+      s.sqlite.close();
+    }
+  });
+
+  it('adds the marker only to LIFF destinations', async () => {
+    const s = setup();
+    try {
+      const link = await s.createLink('a', 'https://lp.example/page?utm_source=x');
+      const r = await s.request(new URL(link.trackingUrl).pathname, { headers: { 'user-agent': SAFARI_UA } });
+      expect(new URL(r.headers.get('location')!).searchParams.has('lh_link')).toBe(false);
     } finally {
       s.sqlite.close();
     }

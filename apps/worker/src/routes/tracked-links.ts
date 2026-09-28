@@ -1,4 +1,4 @@
-import { readAdAttribution, withAdAttribution } from '../lib/ad-attribution.js';
+import { readAdAttribution, withAdAttribution, withTrackedLinkMarker } from '../lib/ad-attribution.js';
 import { deliveryEnabled, deliverySuppressed } from '../lib/delivery-policy.js';
 import { Hono } from 'hono';
 import {
@@ -353,7 +353,10 @@ trackedLinks.get('/t/:linkId', async (c) => {
   // LIFF はリンクを所有するアカウントのものを使う。グローバル env.LIFF_URL 固定だと
   // 他アカウントの友だちに①の同意画面が出る（未同意チャネルの LIFF に飛ぶため）。
   const isLineApp = /\bLine\b/i.test(ua);
-  if (!useAppRedirect && !lineUserId && !friendId && isLineApp) {
+  // konkatsucafe fork (L-06 s2): LIFF で本人を確かめられずに戻ってきたとき（lh_noid=1）は、
+  // もう一度 LIFF へ回さない（回すと LIFF と /t の間を行き来し続ける）。誰でもない人のクリックとして進める。
+  const identificationFailed = c.req.query('lh_noid') === '1';
+  if (!useAppRedirect && !lineUserId && !friendId && isLineApp && !identificationFailed) {
     let liffBase: string | null = null;
     const account = await resolveLinkAccount(c.env.DB, link);
     const liffId = (account?.liff_id as string | null | undefined) ?? null;
@@ -429,7 +432,9 @@ trackedLinks.get('/t/:linkId', async (c) => {
     return c.html(buildAppRedirectHtml(destination));
   }
 
-  return c.redirect(destination, 302);
+  // konkatsucafe fork (L-06 s2): LIFF の飛び先には計測リンクの印を付ける。本人の結び付け
+  // （lu）が落ちても、予約の受け口が印と広告値から友だち情報を埋められるようにする。
+  return c.redirect(withTrackedLinkMarker(destination, link.short_code ?? link.id), 302);
 });
 
 export { trackedLinks };

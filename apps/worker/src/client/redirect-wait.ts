@@ -31,3 +31,12 @@ export function waitForLinkBeforeRedirect(
     sleep(linkWaitBeforeRedirectMs(redirectUrl)),
   ]);
 }
+
+/**
+ * konkatsucafe fork (L-06 s2): LIFF で本人を確かめられなかったとき（LINE Login の失敗など）の戻り先。
+ * 計測リンクには lh_noid=1 を付け、/t がもう一度 LIFF へ回さないようにする（行き来を止める）。
+ */
+export function redirectAfterIdentificationFailure(redirectUrl: string): string {
+  if (!isTrackedLinkRedirect(redirectUrl) || /[?&]lh_noid=1(?:&|$)/.test(redirectUrl)) return redirectUrl;
+  return `${redirectUrl}${redirectUrl.includes('?') ? '&' : '?'}lh_noid=1`;
+}
